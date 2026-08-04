@@ -10,7 +10,7 @@ weights, credentials, hostnames, or private network configuration.
 ## Built for NetClaw
 
 These images are built first to power [Netclaw](https://netclaw.dev/),
-Petabridge's open-source AI agent. NetClaw runs on your hardware, connects to
+Petabridge's open-source AI agent. Netclaw runs on your hardware, connects to
 the communications tools your team already uses, and keeps agent execution and
 inference under your control. The images remain usable as standalone inference
 runtimes wherever their documented hardware and model requirements fit.
