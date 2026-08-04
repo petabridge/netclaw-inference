@@ -59,6 +59,7 @@ RUN set -euxo pipefail; \
     python3 -m pip install --no-cache-dir --no-deps /tmp/build-dependencies/*.whl; \
     SETUPTOOLS_SCM_PRETEND_VERSION=0.26.0+dspark.sm121.3 \
     VLLM_PRECOMPILED_WHEEL_LOCATION=/tmp/parent-vllm-native.whl \
+    VLLM_SKIP_PRECOMPILED_VERSION_SUFFIX=1 \
     VLLM_USE_PRECOMPILED=1 \
     python3 -m pip wheel \
         --no-build-isolation \
