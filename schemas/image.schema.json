@@ -24,7 +24,7 @@
     "platform": { "enum": ["linux/arm64", "linux/amd64"] },
     "registry_repository": {
       "type": "string",
-      "pattern": "^petabridge/inference/[a-z0-9]+(?:[._/-][a-z0-9]+)*$"
+      "pattern": "^petabridge/[a-z0-9]+(?:[._-][a-z0-9]+)*$"
     },
     "build_enabled": { "type": "boolean" },
     "disabled_reason": { "type": "string", "minLength": 1 },

@@ -1,8 +1,7 @@
 # NetClaw Inference Images
 
-Reproducible, validated container images for Petabridge inference hardware.
-Images are published to the tailnet-only registry at
-`docker.testlab.petabridge.net`.
+Reproducible, validated, open-source container images for Petabridge inference
+hardware. Images are published publicly through GitHub Container Registry.
 
 ## Repository layout
 
@@ -26,10 +25,9 @@ currently pinned by this repository.
 
 ## CI/CD contract
 
-1. Pull requests run static validation on a GitHub-hosted runner. PR code does
-   not execute inside the testlab tailnet.
-2. Candidate builds are manual, master-only, and scoped to the
-   `inference-image-build` GitHub environment.
+1. Pull requests run static validation only on a GitHub-hosted runner.
+2. Candidate builds are manual, master-only, run on a native GitHub-hosted
+   ARM64 runner, and are scoped to the `inference-image-build` environment.
 3. Candidate images receive only an immutable `sha-<commit>` tag.
 4. Promotion is a separate manual workflow. It accepts an exact
    `sha256:<digest>` and adds a semantic-version tag without rebuilding.
@@ -44,7 +42,7 @@ See [docs/ci-cd.md](docs/ci-cd.md) for operational details.
 Image manifests use repository paths below the shared registry, for example:
 
 ```text
-docker.testlab.petabridge.net/petabridge/inference/vllm-deepseek-v4-flash-0731-dspark-gb10
+ghcr.io/petabridge/vllm-deepseek-v4-flash-0731-dspark-gb10
 ```
 
 Deployments should pin the resulting manifest digest, not a mutable tag.

@@ -1,16 +1,9 @@
 # CI/CD and release gates
 
-## Why validation and publishing use different runners
+## Public runner boundary
 
-Pull-request code runs on a GitHub-hosted runner. The ARC runners can reach the
-tailnet and private registry, so they are reserved for trusted, master-only
-workflows. This prevents an unmerged workflow or script from gaining testlab
-network access.
-
-Registry jobs use the same `arc-petabridge-x64` scale set as `netclaw-images`.
-The scale set supplies an ephemeral runner and a privileged Docker-in-Docker
-sidecar. GitHub's `private-testlab` runner group must explicitly allow this
-private repository.
+All workflows use GitHub-hosted runners. The public repository has no access to
+Petabridge self-hosted runners, private registries, or private networks.
 
 ## Candidate build
 
@@ -19,8 +12,8 @@ provide the path to an enabled `image.json`. The workflow:
 
 1. validates the repository on a GitHub-hosted runner;
 2. enters the master-only `inference-image-build` environment;
-3. starts an ephemeral ARC runner inside the testlab network;
-4. configures QEMU and Buildx for the manifest's target platform;
+3. starts a native GitHub-hosted ARM64 runner;
+4. configures pinned BuildKit tooling for the manifest's target platform;
 5. builds and pushes `sha-<12-character commit>`;
 6. publishes BuildKit SBOM/provenance attestations;
 7. verifies the resulting digest and target platform; and
@@ -47,23 +40,14 @@ Dockerfiles, image manifests, dependency locks, patches, overlays, and the
 build/promotion scripts. Documentation-only image changes do not require a
 release-note entry.
 
-The current GitHub plan does not support required reviewers on private-repo
-environments. The enforced gates are therefore the protected `master` branch,
-disabled-by-default image definitions, explicit manual dispatch, immutable
-candidate tags, and the independent exact-digest promotion workflow.
+The enforced gates are the protected `master` branch, disabled-by-default image
+definitions, explicit manual dispatch, immutable candidate tags, and the
+independent exact-digest promotion workflow.
 
 ## Builder capacity
 
-The current ARC Docker sidecar is x64 with a 2 CPU / 8 GiB limit. It is suitable
-for validation, registry operations, ordinary x64 images, and thin ARM64
-overlays. A full ARM64 CUDA/vLLM source build under QEMU is expected to be slow
-and may exceed that memory limit. Before enabling the DGX Spark definition,
-qualify one of these build strategies:
-
-- increase the gated ARC builder's resources;
-- attach a native ARM64 remote BuildKit worker; or
-- add a separate native ARM64 ARC scale set while retaining the same workflow
-  and registry gates.
-
-Do not silently move the full build onto a production Spark node. Builder
-infrastructure belongs in Git and must have explicit resource isolation.
+Candidate builds use native GitHub-hosted ARM64 capacity. The first full build
+must establish whether the selected runner has sufficient memory and scratch
+space for the CUDA/vLLM source build; if it does not, move to a larger
+GitHub-hosted ARM64 runner without granting the repository private-network
+access.

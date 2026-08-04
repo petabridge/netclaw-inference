@@ -14,7 +14,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 manifest="$1"
 digest="$2"
 release_tag="$3"
-registry="${REGISTRY:-docker.testlab.petabridge.net}"
+registry="${REGISTRY:-ghcr.io}"
 
 if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
   echo "Promotion requires an exact sha256 image digest." >&2

@@ -6,7 +6,7 @@
   "vendor": "nvidia",
   "hardware_family": "dgx-spark",
   "platform": "linux/arm64",
-  "registry_repository": "petabridge/inference/vllm-deepseek-v4-flash-0731-dspark-gb10",
+  "registry_repository": "petabridge/vllm-deepseek-v4-flash-0731-dspark-gb10",
   "build_enabled": false,
   "disabled_reason": "The 0731-native source baseline and SM121 patch set are still being audited."
 }
