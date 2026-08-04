@@ -92,11 +92,18 @@ COPY attribution/ /usr/share/doc/netclaw-inference/
 SHELL ["/bin/bash", "-c"]
 
 RUN set -euxo pipefail; \
-    python3 -m pip uninstall --yes vllm; \
-    python3 -m pip install --no-cache-dir --no-deps /tmp/petabridge-wheels/vllm-*.whl; \
+    site_packages=/usr/local/lib/python3.12/dist-packages; \
+    find "$site_packages/vllm" -type f \( -name '*.so' -o -name '*.so.*' -o -name 'vllm-rs' \) -print0 \
+        | sort --zero-terminated \
+        | xargs --null --no-run-if-empty sha256sum > /tmp/parent-native-artifacts.sha256; \
+    test "$(wc -l < /tmp/parent-native-artifacts.sha256)" -gt 0; \
+    python3 -m pip install --ignore-installed --no-cache-dir --no-deps /tmp/petabridge-wheels/vllm-*.whl; \
     rm -rf /tmp/petabridge-wheels; \
     python3 -c 'from importlib.metadata import version; assert version("vllm") == "0.26.0+dspark.sm121.3"'; \
-    cd /usr/local/lib/python3.12/dist-packages; \
+    python3 -c 'import vllm; assert vllm.__version__ == "0.26.0+dspark.sm121.3"'; \
+    sha256sum --check --quiet /tmp/parent-native-artifacts.sha256; \
+    rm /tmp/parent-native-artifacts.sha256; \
+    cd "$site_packages"; \
     sha256sum --check --quiet /usr/local/share/petabridge/runtime-overlay.sha256
 
 WORKDIR /vllm-workspace

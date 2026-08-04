@@ -34,7 +34,9 @@
     },
     "native_artifacts": {
       "mode": "inherited-from-pinned-base",
-      "reason": "The public known-fix recipe does not publish the complete patched FlashInfer parent build inputs."
+      "reason": "The public known-fix recipe does not publish the complete patched FlashInfer parent build inputs.",
+      "install_policy": "overlay-without-uninstall",
+      "validation": "SHA-256 every native vLLM shared object and Rust executable before and after package installation"
     },
     "build_dependencies": {
       "setuptools-rust": {
