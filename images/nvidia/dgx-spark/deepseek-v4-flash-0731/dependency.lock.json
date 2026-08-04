@@ -34,6 +34,16 @@
     "native_artifacts": {
       "mode": "inherited-from-pinned-base",
       "reason": "The public known-fix recipe does not publish the complete patched FlashInfer parent build inputs."
+    },
+    "build_dependencies": {
+      "setuptools-rust": {
+        "version": "1.13.0",
+        "wheel_sha256": "666439c4d90e968bb625bcf87ec0aa02b4f49e599d2f5dc255c633a04e8eca99"
+      },
+      "semantic-version": {
+        "version": "2.10.0",
+        "wheel_sha256": "de78a3b8e0feda74cabc54aab2da702113e33ac9d9eb9d2389bcf1f58b7d9177"
+      }
     }
   },
   "provenance": {

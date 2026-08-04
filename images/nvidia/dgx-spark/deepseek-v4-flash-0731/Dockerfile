@@ -10,6 +10,12 @@ WORKDIR /opt/petabridge/vllm
 ADD --checksum=sha256:00cd0a71ecdfcdc96bcc6c2cddaa3e548d024f96c1a8354ed69c8331ae9154cf \
     https://github.com/vllm-project/vllm/archive/568afb3a13806beb53bb2e6bd518269357b237c0.tar.gz \
     /tmp/vllm.tar.gz
+ADD --checksum=sha256:666439c4d90e968bb625bcf87ec0aa02b4f49e599d2f5dc255c633a04e8eca99 \
+    https://files.pythonhosted.org/packages/0b/80/909e46e684e47b116ed145bf2a1a8f5f7c9d90e8c3f8f7fce6a529c0068d/setuptools_rust-1.13.0-py3-none-any.whl \
+    /tmp/build-dependencies/setuptools_rust-1.13.0-py3-none-any.whl
+ADD --checksum=sha256:de78a3b8e0feda74cabc54aab2da702113e33ac9d9eb9d2389bcf1f58b7d9177 \
+    https://files.pythonhosted.org/packages/6a/23/8146aad7d88f4fcb3a6218f41a60f6c2d4e3a72de72da1825dc7c8f7877c/semantic_version-2.10.0-py2.py3-none-any.whl \
+    /tmp/build-dependencies/semantic_version-2.10.0-py2.py3-none-any.whl
 
 COPY source-overlay/ /tmp/source-overlay/
 COPY source-overlay.sha256 runtime-overlay.sha256 /tmp/
@@ -47,6 +53,7 @@ with zipfile.ZipFile(
 PY
 
 RUN set -euxo pipefail; \
+    python3 -m pip install --no-cache-dir --no-deps /tmp/build-dependencies/*.whl; \
     SETUPTOOLS_SCM_PRETEND_VERSION=0.26.0+dspark.sm121.3 \
     VLLM_PRECOMPILED_WHEEL_LOCATION=/tmp/parent-vllm-native.whl \
     VLLM_USE_PRECOMPILED=1 \
