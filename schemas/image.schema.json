@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/petabridge/netclaw-inference/schemas/image.schema.json",
+  "title": "Petabridge inference image definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "description",
+    "vendor",
+    "hardware_family",
+    "platform",
+    "registry_repository",
+    "build_enabled"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "description": { "type": "string", "minLength": 1 },
+    "vendor": { "enum": ["nvidia", "amd"] },
+    "hardware_family": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "platform": { "enum": ["linux/arm64", "linux/amd64"] },
+    "registry_repository": {
+      "type": "string",
+      "pattern": "^petabridge/inference/[a-z0-9]+(?:[._/-][a-z0-9]+)*$"
+    },
+    "build_enabled": { "type": "boolean" },
+    "disabled_reason": { "type": "string", "minLength": 1 },
+    "context": { "type": "string", "minLength": 1 },
+    "dockerfile": { "type": "string", "minLength": 1 },
+    "build_args": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "build_enabled": { "const": true } } },
+      "then": { "required": ["context", "dockerfile"] },
+      "else": { "required": ["disabled_reason"] }
+    }
+  ]
+}

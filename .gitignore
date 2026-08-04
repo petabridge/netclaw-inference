@@ -1,0 +1,4 @@
+.build/
+build-metadata.json
+*.tar
+*.tar.gz
