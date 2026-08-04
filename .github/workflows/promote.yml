@@ -1,0 +1,73 @@
+name: Promote inference image digest
+run-name: Promote ${{ inputs.manifest_path }} ${{ inputs.digest }} as ${{ inputs.release_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Repository-relative path to the enabled image.json
+        required: true
+        type: string
+      digest:
+        description: Exact candidate manifest digest (sha256:...)
+        required: true
+        type: string
+      release_tag:
+        description: New immutable semantic version tag (for example v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inference-promotion-${{ inputs.manifest_path }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Verify and promote existing digest
+    if: github.ref == 'refs/heads/master'
+    runs-on: arc-petabridge-x64
+    environment: inference-image-promote
+    timeout-minutes: 30
+    env:
+      REGISTRY: docker.testlab.petabridge.net
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate repository and selected image
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+        run: |
+          ./scripts/validate-repository.sh
+          ./scripts/validate-image-manifest.sh "$MANIFEST_PATH"
+
+      - name: Configure pinned BuildKit tooling
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+
+      - name: Promote without rebuilding
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          IMAGE_DIGEST: ${{ inputs.digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          ./scripts/promote-image.sh \
+            "$MANIFEST_PATH" \
+            "$IMAGE_DIGEST" \
+            "$RELEASE_TAG"
+
+      - name: Record release
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+          IMAGE_DIGEST: ${{ inputs.digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          repository="$(jq -r '.registry_repository' "$MANIFEST_PATH")"
+          printf '### Release promoted\n\n    %s/%s:%s@%s\n' \
+            "$REGISTRY" "$repository" "$RELEASE_TAG" "$IMAGE_DIGEST" \
+            >> "$GITHUB_STEP_SUMMARY"

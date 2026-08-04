@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../../schemas/image.schema.json",
+  "schema_version": 1,
+  "id": "deepseek-v4-flash-0731-dspark",
+  "description": "DeepSeek V4 Flash 0731 DSpark runtime for two NVIDIA DGX Sparks",
+  "vendor": "nvidia",
+  "hardware_family": "dgx-spark",
+  "platform": "linux/arm64",
+  "registry_repository": "petabridge/inference/deepseek-v4-flash-0731-dspark",
+  "build_enabled": false,
+  "disabled_reason": "The 0731-native source baseline and SM121 patch set are still being audited."
+}

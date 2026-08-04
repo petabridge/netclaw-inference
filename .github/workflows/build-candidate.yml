@@ -1,0 +1,100 @@
+name: Build inference image candidate
+run-name: Build candidate from ${{ inputs.manifest_path }} at ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Repository-relative path to an enabled image.json
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inference-candidate-${{ inputs.manifest_path }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate protected source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require master
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/master" ]; then
+            echo "Candidate builds must be dispatched from master, not $GITHUB_REF." >&2
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate repository and selected image
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+        run: |
+          ./scripts/validate-repository.sh
+          ./scripts/validate-image-manifest.sh "$MANIFEST_PATH"
+          if [ "$(jq -r '.build_enabled' "$MANIFEST_PATH")" != "true" ]; then
+            echo "Selected image definition is disabled." >&2
+            exit 1
+          fi
+
+  build:
+    name: Build and publish candidate
+    needs: validate
+    runs-on: arc-petabridge-x64
+    environment: inference-image-build
+    timeout-minutes: 720
+    env:
+      REGISTRY: docker.testlab.petabridge.net
+    outputs:
+      digest: ${{ steps.result.outputs.digest }}
+      image_ref: ${{ steps.result.outputs.image_ref }}
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install pinned ARM64 emulation
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: tonistiigi/binfmt:qemu-v9.2.0@sha256:ea2f0dd74e74f101df59f9a6b31d0960994060c7982a921cbceecee0f1841125
+          platforms: arm64
+
+      - name: Configure pinned BuildKit
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+
+      - name: Build and push immutable candidate
+        env:
+          BUILD_METADATA_FILE: ${{ runner.temp }}/build-metadata.json
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+        run: |
+          candidate_tag="sha-${GITHUB_SHA:0:12}"
+          ./scripts/build-image.sh "$MANIFEST_PATH" "$candidate_tag"
+
+      - name: Record published digest
+        id: result
+        env:
+          BUILD_METADATA_FILE: ${{ runner.temp }}/build-metadata.json
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+        run: |
+          digest="$(jq -r '.["containerimage.digest"]' "$BUILD_METADATA_FILE")"
+          repository="$(jq -r '.registry_repository' "$MANIFEST_PATH")"
+          image_ref="$REGISTRY/$repository:sha-${GITHUB_SHA:0:12}"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
+          printf '### Candidate published\n\n    %s@%s\n' "$image_ref" "$digest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload BuildKit metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-metadata-${{ github.sha }}
+          path: ${{ runner.temp }}/build-metadata.json
+          if-no-files-found: error
+          retention-days: 90
