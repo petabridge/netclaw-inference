@@ -18,9 +18,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
 
       - name: Validate manifests, paths, pins, and shell syntax
         run: ./scripts/validate-repository.sh
+
+      - name: Require release notes for build-affecting changes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./scripts/validate-release-notes.sh --changed-since "$BASE_SHA"
 
       - name: Run pinned ShellCheck
         run: |

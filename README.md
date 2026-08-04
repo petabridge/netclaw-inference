@@ -20,8 +20,9 @@ executing repository-controlled shell as configuration.
 
 The first planned image is
 `images/nvidia/dgx-spark/deepseek-v4-flash-0731/image.json`. It is intentionally
-disabled until the DeepSeek V4 Flash 0731-native vLLM, FlashInfer, b12x, and
-DSpark revisions have been selected and audited.
+disabled until the DeepSeek V4 Flash 0731 vLLM baseline and the FlashInfer,
+b12x, and DSpark revisions have been selected and audited. No vLLM version is
+currently pinned by this repository.
 
 ## CI/CD contract
 
@@ -33,6 +34,8 @@ DSpark revisions have been selected and audited.
 4. Promotion is a separate manual workflow. It accepts an exact
    `sha256:<digest>` and adds a semantic-version tag without rebuilding.
 5. BuildKit emits an SBOM and maximum-mode provenance with the candidate image.
+6. Promotion requires a dated entry in [`RELEASE_NOTES.md`](RELEASE_NOTES.md)
+   that explicitly lists the image id being released.
 
 See [docs/ci-cd.md](docs/ci-cd.md) for operational details.
 
@@ -41,7 +44,7 @@ See [docs/ci-cd.md](docs/ci-cd.md) for operational details.
 Image manifests use repository paths below the shared registry, for example:
 
 ```text
-docker.testlab.petabridge.net/petabridge/inference/deepseek-v4-flash-0731-dspark
+docker.testlab.petabridge.net/petabridge/inference/vllm-deepseek-v4-flash-0731-dspark-gb10
 ```
 
 Deployments should pin the resulting manifest digest, not a mutable tag.

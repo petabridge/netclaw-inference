@@ -20,6 +20,8 @@ This repository builds inference container images for Petabridge hardware.
 - Use feature branches and pull requests. Do not push changes directly to
   `master` after the initial repository bootstrap.
 - Update the image README and lock data whenever runtime behavior changes.
+- Add or update the top entry in `RELEASE_NOTES.md` whenever a Dockerfile,
+  image manifest, dependency lock, patch, or overlay changes.
 - Run `./scripts/validate-repository.sh` before committing.
 - Shell scripts use `#!/bin/bash`, `set -euo pipefail`, quoted paths, and usage
   checks.
@@ -33,3 +35,5 @@ This repository builds inference container images for Petabridge hardware.
   dependency lock data, and all downstream patches or overlays.
 - Set `build_enabled` to `false` while an image definition is incomplete or
   unqualified. Enabling it requires all referenced build files to exist.
+- Before promotion, replace `Unreleased` with the release date and list every
+  promoted image id in that release section.

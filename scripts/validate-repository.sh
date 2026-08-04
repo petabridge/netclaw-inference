@@ -9,6 +9,8 @@ for shell_file in "${shell_files[@]}"; do
   bash -n "$shell_file"
 done
 
+"$repo_root/scripts/validate-release-notes.sh"
+
 mapfile -t json_files < <(find . -path './.git' -prune -o -type f -name '*.json' -print | sort)
 for json_file in "${json_files[@]}"; do
   jq empty "$json_file"

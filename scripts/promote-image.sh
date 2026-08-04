@@ -39,6 +39,8 @@ if [[ "$(jq -r '.build_enabled' "$manifest_path")" != "true" ]]; then
   echo "Image definition is disabled and cannot be promoted: $manifest" >&2
   exit 1
 fi
+image_id="$(jq -r '.id' "$manifest_path")"
+"$repo_root/scripts/validate-release-notes.sh" --release "$release_tag" "$image_id"
 repository="$(jq -r '.registry_repository' "$manifest_path")"
 source_ref="$registry/$repository@$digest"
 destination_ref="$registry/$repository:$release_tag"

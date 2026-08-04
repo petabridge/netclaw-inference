@@ -38,6 +38,15 @@ from the existing manifest digest using `docker buildx imagetools create`.
 Promotion fails if the destination tag already points to a different digest.
 This makes releases idempotent and prevents silent tag replacement.
 
+Promotion also requires a matching dated section in `RELEASE_NOTES.md`. The
+section must list the selected image id. An `Unreleased` entry cannot be
+promoted; preparing the dated notes is a reviewed release-preparation change.
+
+Build-affecting pull requests must update `RELEASE_NOTES.md`. This includes
+Dockerfiles, image manifests, dependency locks, patches, overlays, and the
+build/promotion scripts. Documentation-only image changes do not require a
+release-note entry.
+
 The current GitHub plan does not support required reviewers on private-repo
 environments. The enforced gates are therefore the protected `master` branch,
 disabled-by-default image definitions, explicit manual dispatch, immutable
