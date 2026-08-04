@@ -19,18 +19,18 @@
     },
     "cumulative_patch": {
       "path": "patches/vllm-v0.26.0-dspark-sm121.patch",
-      "sha256": "17432713400bcda550063bd11939a625d290d5d28e53ef05fd1360166749acd5"
+      "sha256": "8f72f8c61b7904434d5e9fb0273a48820527463d6a88a012cd3fdc0b204f606f"
     },
     "source_overlay": {
       "path": "source-overlay",
       "files": 54,
       "lock": "source-overlay.sha256",
-      "lock_sha256": "feb591dfd549e36f30dbb4c63ef5b6453a52f2fa6509acce323e5f2d2e67cd46"
+      "lock_sha256": "25b3a9812f03cb3f639c2c07e9e10ccbcc3d97772d00bb142aae072004c4f3c0"
     },
     "runtime_overlay": {
       "files": 41,
       "lock": "runtime-overlay.sha256",
-      "lock_sha256": "219b69145daac8e2f13ec40f963e02a76f5f50cc983f4946d63e72199862ecb4"
+      "lock_sha256": "f0a8ab4bba7f6154b89fd9b1163fa7562a4873c0a67df1e18ce2f166a4d9f7c7"
     },
     "native_artifacts": {
       "mode": "inherited-from-pinned-base",

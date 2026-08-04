@@ -34,6 +34,12 @@ provenance gap explicit rather than silently depending on it.
 - DSpark speculative decoding, K=6
 - NCCL 2.30.4
 - model revision `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`
+- startup warmup for the portable sparse-MLA 512- and 576-wide Triton layouts
+
+The two portable sparse-MLA layouts are distinct Triton compile keys. The
+512-wide layout covers the value/latent path. The 576-wide layout covers the
+full 512 NoPE plus 64 RoPE query/key path. Startup warms both layouts for every
+reachable TP-local padded head count before the API accepts requests.
 
 Request concurrency, maximum model length, maximum batched tokens, and
 `--max-num-seqs` are deployment settings and are not forced by this image.

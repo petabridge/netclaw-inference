@@ -13,6 +13,11 @@ Images:
 
 Changes:
 
+- **Warm all observed DeepSeek V4 portable sparse-MLA layouts**
+  - Add the production 512-wide Triton specialization to the existing 576-wide
+    startup warmup for both 32- and 64-head TP-local layouts.
+  - Prevent the first long request from compiling the missed multihead
+    accumulate kernel after the API starts.
 - **Publish public images through GitHub Container Registry**
   - Remove the private registry and self-hosted runner dependency.
   - Build on native GitHub-hosted ARM64 and promote through GitHub-hosted x64.

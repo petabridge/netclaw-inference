@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from vllm.model_executor.warmup.flashinfer_sparse_mla_warmup import (
+    _DSV4_PORTABLE_PREFILL_WARM_HEAD_DIMS,
     _DSV4_PORTABLE_PREFILL_WARM_SHAPES,
     _resolve_dsv4_portable_prefill_num_heads,
 )
@@ -123,3 +124,7 @@ def test_portable_prefill_warmup_covers_runtime_scalar_specializations() -> None
         ("equal_one", "equal_one"),
         ("equal_one", "unaligned"),
     } <= classes
+
+
+def test_portable_prefill_warmup_covers_runtime_head_dimensions() -> None:
+    assert _DSV4_PORTABLE_PREFILL_WARM_HEAD_DIMS == (512, 576)

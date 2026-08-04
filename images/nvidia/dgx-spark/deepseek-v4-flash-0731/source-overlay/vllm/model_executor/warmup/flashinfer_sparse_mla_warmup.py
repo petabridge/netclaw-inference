@@ -291,6 +291,15 @@ _DSV4_PORTABLE_PREFILL_WARM_SHAPES = (
 )
 
 
+_DSV4_PORTABLE_PREFILL_WARM_HEAD_DIMS = (
+    # The portable Triton helper is generic. Production uses the 512-wide
+    # value/latent layout as well as the full 512 NoPE + 64 RoPE Q/K layout.
+    # Both head_dim and the derived contiguous strides are compile-time keys.
+    512,
+    576,
+)
+
+
 def _warm_portable_sparse_prefill_accumulate_kernels(runner: "GPUModelRunner") -> None:
     """Compile portable sparse-prefill accumulate kernels before serving.
 
@@ -311,61 +320,62 @@ def _warm_portable_sparse_prefill_accumulate_kernels(runner: "GPUModelRunner") -
     model_config = getattr(runner.vllm_config, "model_config", None)
     hf_config = getattr(model_config, "hf_config", None)
     head_dim = int(getattr(hf_config, "head_dim", 512) or 512)
-    d_qk = 576  # DSv4 sparse MLA qk is NoPE512 + RoPE64
     d_v = 512
     sm_scale = float(head_dim**-0.5)
     head_layouts = _resolve_dsv4_portable_prefill_num_heads(runner)
     warmed = 0
     logger.info(
         "Warming portable sparse-MLA accumulate kernels on %s "
-        "(heads=%s, d_qk=%s, scale=%s).",
+        "(heads=%s, head_dims=%s, scale=%s).",
         device,
         list(head_layouts),
-        d_qk,
+        list(_DSV4_PORTABLE_PREFILL_WARM_HEAD_DIMS),
         sm_scale,
     )
     with torch.inference_mode():
         for num_heads in head_layouts:
-            for num_tokens, num_candidates, num_kv_rows in (
-                _DSV4_PORTABLE_PREFILL_WARM_SHAPES
-            ):
-                q = torch.empty(
-                    (num_tokens, num_heads, d_qk),
-                    dtype=torch.bfloat16,
-                    device=device,
-                )
-                kv = torch.empty(
-                    (num_kv_rows, 1, d_qk),
-                    dtype=torch.bfloat16,
-                    device=device,
-                )
-                indices = torch.zeros(
-                    (num_tokens, 1, num_candidates),
-                    dtype=torch.int32,
-                    device=device,
-                )
-                base = torch.arange(
-                    num_candidates, device=device, dtype=torch.int32
-                ) % max(num_kv_rows - 1, 1)
-                indices.copy_(
-                    base.view(1, 1, -1).expand(num_tokens, 1, num_candidates)
-                )
-                if num_candidates > 1:
-                    indices[:, :, -1] = -1
-                flash_mla_sparse_fwd_triton(
-                    q=q,
-                    kv=kv,
-                    indices=indices,
-                    sm_scale=sm_scale,
-                    d_v=d_v,
-                )
-                warmed += 1
+            for warm_head_dim in _DSV4_PORTABLE_PREFILL_WARM_HEAD_DIMS:
+                for num_tokens, num_candidates, num_kv_rows in (
+                    _DSV4_PORTABLE_PREFILL_WARM_SHAPES
+                ):
+                    q = torch.empty(
+                        (num_tokens, num_heads, warm_head_dim),
+                        dtype=torch.bfloat16,
+                        device=device,
+                    )
+                    kv = torch.empty(
+                        (num_kv_rows, 1, warm_head_dim),
+                        dtype=torch.bfloat16,
+                        device=device,
+                    )
+                    indices = torch.zeros(
+                        (num_tokens, 1, num_candidates),
+                        dtype=torch.int32,
+                        device=device,
+                    )
+                    base = torch.arange(
+                        num_candidates, device=device, dtype=torch.int32
+                    ) % max(num_kv_rows - 1, 1)
+                    indices.copy_(
+                        base.view(1, 1, -1).expand(num_tokens, 1, num_candidates)
+                    )
+                    if num_candidates > 1:
+                        indices[:, :, -1] = -1
+                    flash_mla_sparse_fwd_triton(
+                        q=q,
+                        kv=kv,
+                        indices=indices,
+                        sm_scale=sm_scale,
+                        d_v=d_v,
+                    )
+                    warmed += 1
         torch.cuda.synchronize()
     logger.info(
         "Warmed %s portable sparse-MLA accumulate specializations before serving "
-        "(head_layouts=%s).",
+        "(head_layouts=%s, head_dims=%s).",
         warmed,
         list(head_layouts),
+        list(_DSV4_PORTABLE_PREFILL_WARM_HEAD_DIMS),
     )
 
 
