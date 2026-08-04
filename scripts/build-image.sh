@@ -13,7 +13,7 @@ fi
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 manifest="$1"
 candidate_tag="$2"
-registry="${REGISTRY:-docker.testlab.petabridge.net}"
+registry="${REGISTRY:-ghcr.io}"
 metadata_file="${BUILD_METADATA_FILE:-$repo_root/build-metadata.json}"
 
 if [[ ! "$candidate_tag" =~ ^sha-[a-f0-9]{12}$ ]]; then

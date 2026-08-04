@@ -28,14 +28,24 @@ jobs:
   promote:
     name: Verify and promote existing digest
     if: github.ref == 'refs/heads/master'
-    runs-on: arc-petabridge-x64
+    runs-on: ubuntu-24.04
     environment: inference-image-promote
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     env:
-      REGISTRY: docker.testlab.petabridge.net
+      REGISTRY: ghcr.io
     steps:
       - name: Check out protected source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Validate repository and selected image
         env:

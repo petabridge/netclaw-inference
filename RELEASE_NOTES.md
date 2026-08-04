@@ -13,6 +13,9 @@ Images:
 
 Changes:
 
+- **Publish public images through GitHub Container Registry**
+  - Remove the private registry and self-hosted runner dependency.
+  - Build on native GitHub-hosted ARM64 and promote through GitHub-hosted x64.
 - **Bootstrap gated, multi-platform inference image CI/CD** (#1)
   - Add separate NVIDIA DGX Spark and future AMD ROCm image families.
   - Add immutable candidate builds, SBOM/provenance, and digest-only promotion.

@@ -46,7 +46,7 @@ jq -e '
   (.vendor == "nvidia" or .vendor == "amd") and
   (.hardware_family | type == "string" and test("^[a-z0-9]+(?:-[a-z0-9]+)*$")) and
   (.platform == "linux/arm64" or .platform == "linux/amd64") and
-  (.registry_repository | type == "string" and test("^petabridge/inference/[a-z0-9]+(?:[._/-][a-z0-9]+)*$")) and
+  (.registry_repository | type == "string" and test("^petabridge/[a-z0-9]+(?:[._-][a-z0-9]+)*$")) and
   (.build_enabled | type == "boolean") and
   ((.build_args // {}) | type == "object") and
   ([((.build_args // {}) | to_entries[]) |
@@ -71,7 +71,7 @@ platform="$(jq -r '.platform' "$manifest_path")"
 registry_repository="$(jq -r '.registry_repository' "$manifest_path")"
 build_enabled="$(jq -r '.build_enabled' "$manifest_path")"
 
-if [[ "$registry_repository" != "petabridge/inference/$id" ]]; then
+if [[ "$registry_repository" != "petabridge/$id" ]]; then
   echo "registry_repository must end with the manifest id: $id" >&2
   exit 1
 fi
