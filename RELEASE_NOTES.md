@@ -31,6 +31,8 @@ Changes:
     them dynamically.
   - Preserve the qualified `0.26.0+dspark.sm121.3` package identity when
     reusing native artifacts, matching vLLM's upstream container build policy.
+  - Install the rebuilt package as an overlay and verify every inherited native
+    vLLM binary remains present and byte-identical after installation.
   - Verify installed runtime source hashes during the image build.
 - **Document the public project and its supply-chain boundary**
   - Add image status, public pull guidance, security properties, and attribution.
