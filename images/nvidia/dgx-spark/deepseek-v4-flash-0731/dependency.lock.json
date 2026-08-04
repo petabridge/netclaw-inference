@@ -14,7 +14,8 @@
       "commit": "568afb3a13806beb53bb2e6bd518269357b237c0",
       "archive": "https://github.com/vllm-project/vllm/archive/568afb3a13806beb53bb2e6bd518269357b237c0.tar.gz",
       "archive_sha256": "00cd0a71ecdfcdc96bcc6c2cddaa3e548d024f96c1a8354ed69c8331ae9154cf",
-      "output_package": "0.26.0+dspark.sm121.3"
+      "output_package": "0.26.0+dspark.sm121.3",
+      "skip_precompiled_version_suffix": true
     },
     "cumulative_patch": {
       "path": "patches/vllm-v0.26.0-dspark-sm121.patch",

@@ -29,6 +29,8 @@ Changes:
   - Pin the build-only `setuptools-rust`, `setuptools-scm`, and
     `semantic-version` wheels by version, URL, and SHA-256 instead of resolving
     them dynamically.
+  - Preserve the qualified `0.26.0+dspark.sm121.3` package identity when
+    reusing native artifacts, matching vLLM's upstream container build policy.
   - Verify installed runtime source hashes during the image build.
 - **Document the public project and its supply-chain boundary**
   - Add image status, public pull guidance, security properties, and attribution.
