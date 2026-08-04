@@ -22,5 +22,14 @@ Changes:
 - **Plan the first DeepSeek V4 Flash 0731 DGX Spark image**
   - Pin the proven r0b0tlab SM121 runtime digest and its complete provenance.
   - Enable a fast-path downstream candidate for immediate dual-Spark testing.
+- **Rebuild the patched vLLM package from pinned source**
+  - Materialize and checksum the cumulative DeepSeek V4 / SM121 source overlay.
+  - Build a new vLLM package while retaining the proven native CUDA, FlashInfer,
+    B12X, NCCL, and extension artifacts from the exact pinned parent digest.
+  - Verify installed runtime source hashes during the image build.
+- **Document the public project and its supply-chain boundary**
+  - Add image status, public pull guidance, security properties, and attribution.
+  - Explicitly identify which artifacts Petabridge builds and which remain
+    inherited pending complete public kernel provenance.
 
 ---

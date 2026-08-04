@@ -1,14 +1,52 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "base_image": {
     "reference": "ghcr.io/r0b0tlab/deepseek-v4-flash-dspark-v026-sm121",
     "digest": "sha256:ef852781efd6278cb3d908a4298874fb8b34fe84f0e1a03181ed415ec233a9d4",
     "platform": "linux/arm64",
-    "compressed_size_bytes": 10087564383
+    "compressed_size_bytes": 10087564383,
+    "role": "Proven native CUDA, FlashInfer, B12X, NCCL, Rust, and vLLM extension provider"
+  },
+  "source_build": {
+    "strategy": "pinned-upstream-source-with-inherited-native-artifacts",
+    "vllm": {
+      "repository": "https://github.com/vllm-project/vllm",
+      "commit": "568afb3a13806beb53bb2e6bd518269357b237c0",
+      "archive": "https://github.com/vllm-project/vllm/archive/568afb3a13806beb53bb2e6bd518269357b237c0.tar.gz",
+      "archive_sha256": "00cd0a71ecdfcdc96bcc6c2cddaa3e548d024f96c1a8354ed69c8331ae9154cf",
+      "output_package": "0.26.0+dspark.sm121.3"
+    },
+    "cumulative_patch": {
+      "path": "patches/vllm-v0.26.0-dspark-sm121.patch",
+      "sha256": "17432713400bcda550063bd11939a625d290d5d28e53ef05fd1360166749acd5"
+    },
+    "source_overlay": {
+      "path": "source-overlay",
+      "files": 54,
+      "lock": "source-overlay.sha256",
+      "lock_sha256": "feb591dfd549e36f30dbb4c63ef5b6453a52f2fa6509acce323e5f2d2e67cd46"
+    },
+    "runtime_overlay": {
+      "files": 41,
+      "lock": "runtime-overlay.sha256",
+      "lock_sha256": "219b69145daac8e2f13ec40f963e02a76f5f50cc983f4946d63e72199862ecb4"
+    },
+    "native_artifacts": {
+      "mode": "inherited-from-pinned-base",
+      "reason": "The public known-fix recipe does not publish the complete patched FlashInfer parent build inputs."
+    }
   },
   "provenance": {
     "repository": "https://github.com/r0b0tlab/DeepSeek-V4-Flash-DSpark-v026-SM121",
-    "commit": "d8393134b49f7e92ffd64b9670b5d500fc6478cb"
+    "commit": "d8393134b49f7e92ffd64b9670b5d500fc6478cb",
+    "knownfix_manifest": {
+      "path": "manifests/knownfix-manifest.json",
+      "sha256": "48eec5804d2695ee684b9a5186a8061abf65df7aef62ff69cb976c535c5821ba"
+    },
+    "runtime_manifest": {
+      "path": "manifests/runtime-manifest.vllm-sm121.3.json",
+      "sha256": "f6777b31e8c8977361d629ca99c37a199d3b52b9abc134f1de624eb202f083a9"
+    }
   },
   "model": {
     "id": "deepseek-ai/DeepSeek-V4-Flash-0731",
@@ -19,7 +57,11 @@
     "vllm_package": "0.26.0+dspark.sm121.3",
     "vllm_upstream_commit": "568afb3a13806beb53bb2e6bd518269357b237c0",
     "vllm_integrated_commit": "fbad93432ebf60c8345397b3032fe03bf5d239cc",
+    "cuda_toolkit": "13.0.2",
+    "torch": "2.11.0+cu130",
+    "flashinfer": "0.6.14",
     "nccl_version": "2.30.4",
+    "b12x_version": "0.15.3",
     "b12x_commit": "7dc6fb8fcc6446ea093537d1657df81985fa5f43",
     "cuda_arch": "12.1a",
     "kv_cache_dtype": "nvfp4_ds_mla",

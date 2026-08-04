@@ -1,0 +1,148 @@
+{
+  "attention_backend": "FLASHINFER_MLA_SPARSE_DSV4",
+  "b12x": {
+    "commit": "7dc6fb8fcc6446ea093537d1657df81985fa5f43",
+    "mode": "w4a16",
+    "repository": "https://github.com/lukealonso/b12x.git",
+    "source_format": "fp4_e8m0_k32",
+    "version": "0.15.3"
+  },
+  "base_runtime": "source-built-vllm-v0.26.0",
+  "build_limits": {
+    "max_jobs": 6,
+    "nvcc_threads": 2
+  },
+  "c1_qualification_profile": {
+    "cudagraph_implementation": "regular",
+    "cudagraph_strict": true,
+    "enable_flashinfer_autotune": true,
+    "enforce_eager": false,
+    "gpu_memory_utilization": 0.835,
+    "kv_cache_memory_bytes": 15998753178,
+    "max_model_len": 327680,
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 1,
+    "mtp_tokens": 6,
+    "optimization_level": 2,
+    "performance_mode": "balanced",
+    "qualification_mode": "c1-300k-knownfix",
+    "runtime_lane": "native-v026",
+    "upstream_evidence": "vllm-project/vllm#41530",
+    "use_breakable_cudagraph": false,
+    "vllm_disable_compile_cache": true,
+    "vllm_dsv4_enable_multi_stream": false,
+    "vllm_use_aot_compile": false
+  },
+  "capacity_profile_384k": {
+    "gpu_memory_utilization": 0.84,
+    "max_model_len": 384000,
+    "max_num_seqs": 4,
+    "runtime_lane": "legacy-stage-c",
+    "status": "historical-control"
+  },
+  "cuda_toolkit_version": "13.0.2",
+  "cuda_version": "13.0",
+  "cutlass_dsl_version": "4.6.0",
+  "flashinfer_cubin_version": "0.6.14",
+  "flashinfer_local_patch": {
+    "base_file_sha256": {
+      "flashinfer/data/csrc/sparse_mla_sm120_decode_dsv4.cu": "d8f22ccabee2cc045b0f9b7da6323b8cdd4e7bf5bef49c43a65e6b474a843f65",
+      "flashinfer/data/csrc/sparse_mla_sm120_prefill.cu": "db91ab92b3f69b4cdaad27d495eb4a3f0931fb4b58c7a803eddffdfbf9b0242b",
+      "flashinfer/mla/_sparse_mla_sm120.py": "07c7c236349d7ef82c69fe098d61818abecdf19a4dccfa6757b0500bc6676624"
+    },
+    "gpu_fixture_sha256": "5278188eef40f63dcd4698fc745087ad0a96d9bdce9c7659d9a598acf3432827",
+    "patch_script_sha256": "164e1a9065656ca961096430ac08fd6754acbc6feaaab725c96fcf1ff5a2c588",
+    "patched_file_sha256": {
+      "flashinfer/data/csrc/sparse_mla_sm120_decode_dsv4.cu": "5c20b1bafd3bbacd43fbfa7532e76f2c91e9628aa42d285a7eb2ee14f5052925",
+      "flashinfer/data/csrc/sparse_mla_sm120_prefill.cu": "a71d54d5f23dfbb5e5441000d6db666d5c1faf83f6009bb499af195ce2ecd861",
+      "flashinfer/mla/_sparse_mla_sm120.py": "80ee3f6e9087cdac7535d3476b07a32a7f103547c46ebc8e054db94418408c6e"
+    },
+    "prior_art": {
+      "decode_pr_author": "vedcsolution",
+      "decode_pr_base_sha": "27e035e2a9c52115f716925ca255744acf87f5e6",
+      "decode_pr_head_sha": "76fd3daf7064b73924ebb3bcb1e93a8a26fc6da9",
+      "decode_pr_state": "open-unmerged",
+      "decode_pr_url": "https://github.com/flashinfer-ai/flashinfer/pull/3817",
+      "issue_url": "https://github.com/flashinfer-ai/flashinfer/issues/3828",
+      "prefill_analysis_credit": "eous",
+      "prefill_pr_author": "OsakaTX",
+      "prefill_pr_base_sha": "5eea6b480e8d8e800b01b7a6975c9cac7a3b2036",
+      "prefill_pr_head_sha": "1125246e4b2f19f6a77d42d937c8785a1f687445",
+      "prefill_pr_state": "closed-unmerged",
+      "prefill_pr_url": "https://github.com/flashinfer-ai/flashinfer/pull/3896"
+    },
+    "removed_aot_path": "/usr/local/lib/python3.12/dist-packages/flashinfer_jit_cache/jit_cache/sparse_mla_sm120",
+    "revision": "sm120-dsv4-topk256.1",
+    "status": "local-attributed-open-pr-backport"
+  },
+  "flashinfer_version": "0.6.14",
+  "integrated_vllm_commit": "fbad93432ebf60c8345397b3032fe03bf5d239cc",
+  "kv_cache_dtype": "nvfp4_ds_mla",
+  "long_context_profile": {
+    "cudagraph_implementation": "regular",
+    "cudagraph_strict": true,
+    "gpu_memory_utilization": 0.835,
+    "kv_cache_memory_bytes": 15998753178,
+    "max_model_len": 1048576,
+    "max_num_batched_tokens": 8192,
+    "max_num_seqs": 1,
+    "runtime_lane": "native-v026",
+    "status": "candidate-unmeasured",
+    "vllm_disable_compile_cache": true,
+    "vllm_dsv4_enable_multi_stream": false,
+    "vllm_use_aot_compile": false
+  },
+  "model_id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+  "model_revision": "9e165c30e2704aec5d9d593cce3eebd58bbef1cb",
+  "moe_backend": "flashinfer_b12x",
+  "primary_optimization_target": {
+    "concurrency": 1,
+    "prefix_cache_hits_required": 0,
+    "prompt_tokens_max": 300500,
+    "prompt_tokens_min": 300000,
+    "service_window": 327680
+  },
+  "production_profile": {
+    "cudagraph_implementation": "regular",
+    "cudagraph_strict": true,
+    "enable_flashinfer_autotune": true,
+    "enforce_eager": false,
+    "gpu_memory_utilization": 0.835,
+    "kv_cache_memory_bytes": 15998753178,
+    "max_model_len": 327680,
+    "max_num_batched_tokens": 16384,
+    "max_num_seqs": 16,
+    "mtp_tokens": 6,
+    "optimization_level": 2,
+    "performance_mode": "balanced",
+    "runtime_lane": "native-v026",
+    "use_breakable_cudagraph": false,
+    "vllm_disable_compile_cache": true,
+    "vllm_dsv4_enable_multi_stream": false,
+    "vllm_use_aot_compile": false
+  },
+  "qualification_state": "candidate-unmeasured",
+  "schema_version": 3,
+  "speculative_method": "dspark",
+  "torch_cuda_arch_list": "12.1a",
+  "torch_vendor_wheel": {
+    "advertised_architectures_through": "sm_120",
+    "native_sm121_claim": false
+  },
+  "torch_version": "2.11.0+cu130",
+  "torchvision_version": "0.26.0+cu130",
+  "vllm_commit": "568afb3a13806beb53bb2e6bd518269357b237c0",
+  "vllm_cuda_arch_strategy": {
+    "compatible_device_capabilities": [
+      "12.0",
+      "12.1"
+    ],
+    "cuda13_family_target": "compute_120f",
+    "emitted_cubin_arch": "sm_120f",
+    "ptx_fallback_allowed": false,
+    "requested": "12.1a"
+  },
+  "vllm_patch_sha256": "17432713400bcda550063bd11939a625d290d5d28e53ef05fd1360166749acd5",
+  "vllm_tag": "v0.26.0",
+  "vllm_version": "0.26.0+dspark.sm121.3"
+}

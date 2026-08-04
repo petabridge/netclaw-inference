@@ -2,7 +2,7 @@
   "$schema": "../../../../schemas/image.schema.json",
   "schema_version": 1,
   "id": "vllm-deepseek-v4-flash-0731-dspark-gb10",
-  "description": "DeepSeek V4 Flash 0731 DSpark runtime for two NVIDIA DGX Sparks",
+  "description": "Pinned-source DeepSeek V4 Flash 0731 vLLM runtime for two NVIDIA DGX Sparks",
   "vendor": "nvidia",
   "hardware_family": "dgx-spark",
   "platform": "linux/arm64",
