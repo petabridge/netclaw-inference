@@ -43,6 +43,10 @@
       "semantic-version": {
         "version": "2.10.0",
         "wheel_sha256": "de78a3b8e0feda74cabc54aab2da702113e33ac9d9eb9d2389bcf1f58b7d9177"
+      },
+      "setuptools-scm": {
+        "version": "8.3.1",
+        "wheel_sha256": "332ca0d43791b818b841213e76b1971b7711a960761c5bea5fc5cdb5196fbce3"
       }
     }
   },
