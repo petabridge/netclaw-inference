@@ -16,6 +16,9 @@ ADD --checksum=sha256:666439c4d90e968bb625bcf87ec0aa02b4f49e599d2f5dc255c633a04e
 ADD --checksum=sha256:de78a3b8e0feda74cabc54aab2da702113e33ac9d9eb9d2389bcf1f58b7d9177 \
     https://files.pythonhosted.org/packages/6a/23/8146aad7d88f4fcb3a6218f41a60f6c2d4e3a72de72da1825dc7c8f7877c/semantic_version-2.10.0-py2.py3-none-any.whl \
     /tmp/build-dependencies/semantic_version-2.10.0-py2.py3-none-any.whl
+ADD --checksum=sha256:332ca0d43791b818b841213e76b1971b7711a960761c5bea5fc5cdb5196fbce3 \
+    https://files.pythonhosted.org/packages/ab/ac/8f96ba9b4cfe3e4ea201f23f4f97165862395e9331a424ed325ae37024a8/setuptools_scm-8.3.1-py3-none-any.whl \
+    /tmp/build-dependencies/setuptools_scm-8.3.1-py3-none-any.whl
 
 COPY source-overlay/ /tmp/source-overlay/
 COPY source-overlay.sha256 runtime-overlay.sha256 /tmp/

@@ -26,8 +26,9 @@ Changes:
   - Materialize and checksum the cumulative DeepSeek V4 / SM121 source overlay.
   - Build a new vLLM package while retaining the proven native CUDA, FlashInfer,
     B12X, NCCL, and extension artifacts from the exact pinned parent digest.
-  - Pin the build-only `setuptools-rust` and `semantic-version` wheels by
-    version, URL, and SHA-256 instead of resolving them dynamically.
+  - Pin the build-only `setuptools-rust`, `setuptools-scm`, and
+    `semantic-version` wheels by version, URL, and SHA-256 instead of resolving
+    them dynamically.
   - Verify installed runtime source hashes during the image build.
 - **Document the public project and its supply-chain boundary**
   - Add image status, public pull guidance, security properties, and attribution.
