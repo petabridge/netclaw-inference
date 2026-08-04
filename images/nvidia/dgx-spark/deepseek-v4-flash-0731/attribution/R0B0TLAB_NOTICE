@@ -1,0 +1,8 @@
+DeepSeek-V4-Flash-DSpark v0.26 SM121 optimized package
+Copyright (c) 2026 r0b0tlab
+
+This image derives from r0b0tlab's optimized dual-GB10 serving runtime. It is
+not an official DeepSeek or vLLM product and does not redistribute model
+weights.
+
+Third-party software and models retain their original copyrights and licenses.

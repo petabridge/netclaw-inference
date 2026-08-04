@@ -1,13 +1,18 @@
 # DeepSeek V4 Flash 0731 on DGX Spark
 
-Planned two-node TP=2 vLLM runtime for `deepseek-ai/DeepSeek-V4-Flash-0731` on
-two NVIDIA DGX Sparks.
+Two-node TP=2 vLLM runtime for `deepseek-ai/DeepSeek-V4-Flash-0731` on two
+NVIDIA DGX Sparks.
 
-The definition remains disabled while the vLLM baseline and the required SM121
-FlashInfer, b12x, NVFP4 DS-MLA, 0731 compatibility, and DSpark changes are
-audited. No image can be built from this directory yet.
+The first candidate is deliberately a thin, reproducible derivative of the
+exact r0b0tlab runtime digest already exercised in the testlab. It preserves
+the vLLM `0.26.0+dspark.sm121.3`, FlashInfer B12X, NVFP4 DS-MLA, NCCL 2.30.4,
+and DSpark K=6 implementation while moving distribution to Petabridge's public
+GHCR namespace.
 
-No vLLM version is pinned here today. The current live testlab runtime is based
-on vLLM `0.26.0`, and `v0.26.0` is the likely upstream baseline for this image.
-That upstream release predates the 0731 checkpoint, so all post-release 0731
-changes must be explicit in the future dependency lock and patch provenance.
+The base image, model revision, upstream repository commit, integrated vLLM
+commit, NCCL version, and B12X commit are pinned in `dependency.lock.json`.
+Model weights are not included.
+
+This fast-path candidate is intended to unblock dual-Spark qualification. A
+future release may replace the pinned downstream base with a Petabridge-owned
+source build without changing the package name or release gates.

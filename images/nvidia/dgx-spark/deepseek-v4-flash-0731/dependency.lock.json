@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "base_image": {
+    "reference": "ghcr.io/r0b0tlab/deepseek-v4-flash-dspark-v026-sm121",
+    "digest": "sha256:ef852781efd6278cb3d908a4298874fb8b34fe84f0e1a03181ed415ec233a9d4",
+    "platform": "linux/arm64",
+    "compressed_size_bytes": 10087564383
+  },
+  "provenance": {
+    "repository": "https://github.com/r0b0tlab/DeepSeek-V4-Flash-DSpark-v026-SM121",
+    "commit": "d8393134b49f7e92ffd64b9670b5d500fc6478cb"
+  },
+  "model": {
+    "id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+    "revision": "9e165c30e2704aec5d9d593cce3eebd58bbef1cb",
+    "included_in_image": false
+  },
+  "runtime": {
+    "vllm_package": "0.26.0+dspark.sm121.3",
+    "vllm_upstream_commit": "568afb3a13806beb53bb2e6bd518269357b237c0",
+    "vllm_integrated_commit": "fbad93432ebf60c8345397b3032fe03bf5d239cc",
+    "nccl_version": "2.30.4",
+    "b12x_commit": "7dc6fb8fcc6446ea093537d1657df81985fa5f43",
+    "cuda_arch": "12.1a",
+    "kv_cache_dtype": "nvfp4_ds_mla",
+    "speculative_method": "dspark",
+    "speculative_tokens": 6
+  }
+}

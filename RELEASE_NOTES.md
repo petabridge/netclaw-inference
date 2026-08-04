@@ -20,6 +20,7 @@ Changes:
   - Add separate NVIDIA DGX Spark and future AMD ROCm image families.
   - Add immutable candidate builds, SBOM/provenance, and digest-only promotion.
 - **Plan the first DeepSeek V4 Flash 0731 DGX Spark image**
-  - Keep the image disabled until its vLLM and SM121 dependency lock is audited.
+  - Pin the proven r0b0tlab SM121 runtime digest and its complete provenance.
+  - Enable a fast-path downstream candidate for immediate dual-Spark testing.
 
 ---

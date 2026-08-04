@@ -17,11 +17,10 @@ Every buildable image has an `image.json` manifest. The manifest identifies the
 target platform, Dockerfile, build context, and registry repository without
 executing repository-controlled shell as configuration.
 
-The first planned image is
-`images/nvidia/dgx-spark/deepseek-v4-flash-0731/image.json`. It is intentionally
-disabled until the DeepSeek V4 Flash 0731 vLLM baseline and the FlashInfer,
-b12x, and DSpark revisions have been selected and audited. No vLLM version is
-currently pinned by this repository.
+The first image is
+`images/nvidia/dgx-spark/deepseek-v4-flash-0731/image.json`. Its initial
+candidate is a provenance-pinned downstream build of the exact r0b0tlab
+runtime already exercised on two DGX Sparks. Model weights are not included.
 
 ## CI/CD contract
 
