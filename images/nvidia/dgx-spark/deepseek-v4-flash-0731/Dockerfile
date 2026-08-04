@@ -27,7 +27,7 @@ COPY patches/vllm-v0.26.0-dspark-sm121.patch /tmp/
 SHELL ["/bin/bash", "-c"]
 
 RUN set -euxo pipefail; \
-    echo "17432713400bcda550063bd11939a625d290d5d28e53ef05fd1360166749acd5  /tmp/vllm-v0.26.0-dspark-sm121.patch" | sha256sum --check -; \
+    echo "8f72f8c61b7904434d5e9fb0273a48820527463d6a88a012cd3fdc0b204f606f  /tmp/vllm-v0.26.0-dspark-sm121.patch" | sha256sum --check -; \
     tar --extract --gzip --file /tmp/vllm.tar.gz --strip-components=1; \
     cp --archive /tmp/source-overlay/. .; \
     sha256sum --check --quiet /tmp/source-overlay.sha256
@@ -79,7 +79,7 @@ LABEL org.opencontainers.image.title="Petabridge DeepSeek V4 Flash 0731 DGX Spar
       io.petabridge.vllm.build.kind="pinned-source-with-inherited-native-artifacts" \
       io.petabridge.vllm.upstream.commit="568afb3a13806beb53bb2e6bd518269357b237c0" \
       io.petabridge.vllm.source.archive.sha256="00cd0a71ecdfcdc96bcc6c2cddaa3e548d024f96c1a8354ed69c8331ae9154cf" \
-      io.petabridge.vllm.patch.sha256="17432713400bcda550063bd11939a625d290d5d28e53ef05fd1360166749acd5" \
+      io.petabridge.vllm.patch.sha256="8f72f8c61b7904434d5e9fb0273a48820527463d6a88a012cd3fdc0b204f606f" \
       io.petabridge.vllm.native-artifacts="inherited-from-pinned-base"
 
 COPY --from=vllm-build /opt/petabridge/wheels/ /tmp/petabridge-wheels/
