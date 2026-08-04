@@ -1,4 +1,4 @@
-# NetClaw Inference Images
+# Netclaw Inference Images
 
 Public, reproducible container images for running open inference workloads on
 Petabridge hardware. Images are built on GitHub-hosted runners and published to
@@ -9,7 +9,7 @@ weights, credentials, hostnames, or private network configuration.
 
 ## Built for NetClaw
 
-These images are built first to power [NetClaw](https://netclaw.dev/),
+These images are built first to power [Netclaw](https://netclaw.dev/),
 Petabridge's open-source AI agent. NetClaw runs on your hardware, connects to
 the communications tools your team already uses, and keeps agent execution and
 inference under your control. The images remain usable as standalone inference
