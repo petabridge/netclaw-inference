@@ -6,6 +6,9 @@
 - vLLM is licensed under Apache-2.0. The runtime uses upstream commit
   `568afb3a13806beb53bb2e6bd518269357b237c0` plus the pinned r0b0tlab SM121
   integration identified in `dependency.lock.json`.
+- The SM121 sparse-MLA integration identifies source derived from the
+  Apache-2.0-licensed `jasl/vllm` DeepSeek V4 implementation. The retained
+  source files carry the vLLM contributor SPDX notice.
 - FlashInfer, PyTorch, CUDA, NCCL, and B12X components retain their respective
   upstream copyrights and licenses.
 - NVIDIA and DGX are trademarks of NVIDIA Corporation. No endorsement is

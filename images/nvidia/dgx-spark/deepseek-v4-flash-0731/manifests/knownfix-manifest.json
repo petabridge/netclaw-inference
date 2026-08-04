@@ -1,0 +1,227 @@
+{
+  "cumulative_patch": {
+    "bytes": 436663,
+    "path": "recipe/patches/vllm-v0.26.0-dspark-sm121.patch",
+    "sha256": "17432713400bcda550063bd11939a625d290d5d28e53ef05fd1360166749acd5"
+  },
+  "existing_parent_commit": "851227a38976da600e1206663bf79d3e7e6e12f3",
+  "integrated_source_commit": "fbad93432ebf60c8345397b3032fe03bf5d239cc",
+  "known_issue_sources": [
+    "vllm#41725",
+    "vllm#46253",
+    "vllm#47783",
+    "vllm#48720",
+    "vllm#49026",
+    "vllm#49027",
+    "vllm#49896",
+    "vllm#49897",
+    "vllm#49927",
+    "vllm#49930"
+  ],
+  "materializer_version": "2",
+  "overlay_files": [
+    {
+      "bytes": 16854,
+      "path": "vllm/compilation/breakable_cudagraph.py",
+      "sha256": "13da822bd0f0e84c1553ff5a36ff69513e31bd3ffed8b36494acad4e37f49b69",
+      "status": "M"
+    },
+    {
+      "bytes": 4218,
+      "path": "vllm/config/__init__.py",
+      "sha256": "88886998f8819212f1e8462bc31b3c384ffeb58cdabf1fb97a3244c4bac40e8c",
+      "status": "M"
+    },
+    {
+      "bytes": 69888,
+      "path": "vllm/config/compilation.py",
+      "sha256": "1bf32b4d3363c18de407cb2ebd598e433b3094430ef1af2af0febf41cc2b50e0",
+      "status": "M"
+    },
+    {
+      "bytes": 114026,
+      "path": "vllm/config/vllm.py",
+      "sha256": "4b7d46316213a851d972f9b04c3d5ce55e8f435dcdf257f02fa7685a657f4406",
+      "status": "M"
+    },
+    {
+      "bytes": 104651,
+      "path": "vllm/envs.py",
+      "sha256": "33ddf00ecc65b9634c0cfc26e326ec4a7af46fe36b781af2a9fdef74b18457bd",
+      "status": "M"
+    },
+    {
+      "bytes": 22456,
+      "path": "vllm/model_executor/kernels/mhc/tilelang.py",
+      "sha256": "5aee4473646776e3ec1e471304d9214f2ee333a27e809f7e7902716531855049",
+      "status": "M"
+    },
+    {
+      "bytes": 16398,
+      "path": "vllm/model_executor/warmup/flashinfer_sparse_mla_warmup.py",
+      "sha256": "4d3a96e22854cdccddf870651692dfba46b1c5c6cedf4a8f7183ee2ebe312a72",
+      "status": "M"
+    },
+    {
+      "bytes": 33922,
+      "path": "vllm/models/deepseek_v4/attention.py",
+      "sha256": "12bb821390ceea54f976d46ae4247e0af9eb2eecb6ca7da8bc76e0d32670d64b",
+      "status": "M"
+    },
+    {
+      "bytes": 21383,
+      "path": "vllm/models/deepseek_v4/common/ops/fused_indexer_q.py",
+      "sha256": "54a4295b11bef867ce230fc1e4c28c39a48858a6d16aaecb63a595bfabdbb7a1",
+      "status": "M"
+    },
+    {
+      "bytes": 11051,
+      "path": "vllm/models/deepseek_v4/common/ops/fused_inv_rope_fp8_quant.py",
+      "sha256": "7bdc44f6024600d8e73b834feb1f88b2182d5516538ba7a9e9b49cb7f1720222",
+      "status": "M"
+    },
+    {
+      "bytes": 19549,
+      "path": "vllm/models/deepseek_v4/nvidia/dspark.py",
+      "sha256": "52c71c5fcbce0829a36e84703948f5ebcec72800085f14fcce729886a5b3ea5e",
+      "status": "M"
+    },
+    {
+      "bytes": 42221,
+      "path": "vllm/models/deepseek_v4/nvidia/flashinfer_sparse.py",
+      "sha256": "8cafb0c194f8effc702d1be4638a5436fba851d441a0b780482d5a91714e7b57",
+      "status": "M"
+    },
+    {
+      "bytes": 57165,
+      "path": "vllm/models/deepseek_v4/nvidia/model.py",
+      "sha256": "3c90cc5f6cc9fd717b16ff7e144dce1a42789c46e58561cd24a9f2f9ee9b5454",
+      "status": "M"
+    },
+    {
+      "bytes": 21211,
+      "path": "vllm/models/deepseek_v4/nvidia/mtp.py",
+      "sha256": "fc522c365e139069472eaf4919254453a0130d051efd1893959c0424d520bdcf",
+      "status": "M"
+    },
+    {
+      "bytes": 3392,
+      "path": "vllm/models/deepseek_v4/nvidia/ops/o_proj.py",
+      "sha256": "61d08e25c445cdd505e01b71651ff914ac7ed8343fe4c4266f606ab87f528539",
+      "status": "M"
+    },
+    {
+      "bytes": 4679,
+      "path": "vllm/utils/multi_stream_utils.py",
+      "sha256": "9d6b2e7590c2538234c0c3d197eab48cc80aee8dad8d332226ca5ce9533b0e17",
+      "status": "M"
+    },
+    {
+      "bytes": 15510,
+      "path": "vllm/v1/cudagraph_dispatcher.py",
+      "sha256": "6f76cb37946a30e836b625e2dce7879d935273d95f62b850a88cfb3f6e73c034",
+      "status": "M"
+    },
+    {
+      "bytes": 28077,
+      "path": "vllm/v1/worker/gpu/cudagraph_utils.py",
+      "sha256": "a7f754b7d1be70f0a87bffd43540a0ad026b5bdc6fe662dedd29542bf60b5ac4",
+      "status": "M"
+    },
+    {
+      "bytes": 72228,
+      "path": "vllm/v1/worker/gpu/model_runner.py",
+      "sha256": "ce3d7794f1beb325ef4532fa623abb2f7d594ced6c268899bea6434d6584d9e4",
+      "status": "M"
+    },
+    {
+      "bytes": 8194,
+      "path": "vllm/v1/worker/gpu/model_states/default.py",
+      "sha256": "6c5b86838385dcb4daf8a4e84d2e97fc2e81cf55b29dc39b00189c2ef67e5aa9",
+      "status": "M"
+    },
+    {
+      "bytes": 28462,
+      "path": "vllm/v1/worker/gpu/spec_decode/dflash/speculator.py",
+      "sha256": "17f18b18af2af5fa77d522ef91cf575ac8482b69149c8f16ddb64e5dbe4a9647",
+      "status": "M"
+    },
+    {
+      "bytes": 370957,
+      "path": "vllm/v1/worker/gpu_model_runner.py",
+      "sha256": "6aac14c74b09ce4dc590c35a25a24d44d6510662af568f89fbc828e6e7e02e59",
+      "status": "M"
+    }
+  ],
+  "overlay_version": "native-cudagraph-v1",
+  "schema_version": 2,
+  "source_only_files": [
+    {
+      "bytes": 28969,
+      "path": "tests/compile/test_config.py",
+      "sha256": "2e810f7825a545b8bbad28066258efb102ef5f3ab357ed2363f3ff86ff753199",
+      "status": "M"
+    },
+    {
+      "bytes": 7965,
+      "path": "tests/config/test_cudagraph_implementation.py",
+      "sha256": "b784f4987dd572a7f15d3f4fbbef470e0cdaa1f0acbbc9a05cf318bbb2135646",
+      "status": "A"
+    },
+    {
+      "bytes": 1681,
+      "path": "tests/config/test_dsv4_torch_compile_policy.py",
+      "sha256": "4d138fd632065b4d539fb2dbd7efe3f7880ca77634c104effa0da032d307bab6",
+      "status": "A"
+    },
+    {
+      "bytes": 33717,
+      "path": "tests/engine/test_arg_utils.py",
+      "sha256": "d3c942260fcd799bd1684c62926780340b85a6e1e1544cb3577025803bb035e5",
+      "status": "M"
+    },
+    {
+      "bytes": 30748,
+      "path": "tests/kernels/test_fused_inv_rope_fp8_quant.py",
+      "sha256": "8ce4bdebe546361a37cb03381538f8701976e5cf4a8d6b0c8a879db0de038740",
+      "status": "M"
+    },
+    {
+      "bytes": 3712,
+      "path": "tests/model_executor/test_flashinfer_sparse_mla_warmup.py",
+      "sha256": "b28aaf401e02a76d7340dda598cfb7fae5e11e20dd43adcb4589f57a10694421",
+      "status": "A"
+    },
+    {
+      "bytes": 5752,
+      "path": "tests/model_executor/test_mhc_compile_backend_resolution.py",
+      "sha256": "d6e0abab9ad47a57c5ca0feef4d58615a81cb7013fb94fb62a01d0a29875f5a9",
+      "status": "A"
+    },
+    {
+      "bytes": 1835,
+      "path": "tests/models/test_deepseek_v4_flashinfer_workspace.py",
+      "sha256": "50291d8809339f03ce062571d8a0f56e8c9f97139f0e6c6987963d1eba873e23",
+      "status": "A"
+    },
+    {
+      "bytes": 755,
+      "path": "tests/models/test_deepseek_v4_multi_stream_policy.py",
+      "sha256": "46d8f01d7f6bf7d0c8e42ab9b416c857c0312057fefef5318a5c3ef76bfaf442",
+      "status": "A"
+    },
+    {
+      "bytes": 65590,
+      "path": "tests/test_config.py",
+      "sha256": "2971da9aaedbe55e21b3b8cceeac7bbbf8caeba990ce6765f46faa103ba63361",
+      "status": "M"
+    },
+    {
+      "bytes": 17500,
+      "path": "tests/v1/cudagraph/test_breakable_cudagraph.py",
+      "sha256": "19cd51c960f7752e1f27db43280b7b636cecaad4b04607dd051b2c51b42cdf80",
+      "status": "M"
+    }
+  ],
+  "upstream_commit": "568afb3a13806beb53bb2e6bd518269357b237c0"
+}

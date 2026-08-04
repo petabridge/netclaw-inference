@@ -39,6 +39,9 @@ for manifest in "${manifests[@]}"; do
   jq -r '.registry_repository' "$manifest" >> "$repositories_file"
 done
 
+"$repo_root/scripts/validate-vllm-source-overlay.sh" \
+  "images/nvidia/dgx-spark/deepseek-v4-flash-0731"
+
 duplicate_ids="$(sort "$ids_file" | uniq -d)"
 duplicate_repositories="$(sort "$repositories_file" | uniq -d)"
 if [[ -n "$duplicate_ids" ]]; then
