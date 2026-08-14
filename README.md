@@ -20,7 +20,7 @@ runtimes wherever their documented hardware and model requirements fit.
 | Image | Platform | Intended hardware | Status |
 | --- | --- | --- | --- |
 | [`vllm-deepseek-v4-flash-0731-dspark-gb10`](images/nvidia/dgx-spark/deepseek-v4-flash-0731/README.md) | `linux/arm64` | Two NVIDIA DGX Sparks, TP=2 | Source-build candidate; hardware qualification pending |
-| AMD ROCm family | `linux/amd64` | Future AMD inference hosts | Reserved; no image built yet |
+| [`llama-cpp-rocm-gfx1201-avx2`](images/amd/rocm/llama-cpp-gfx1201-avx2/README.md) | `linux/amd64` | AMD RDNA4 (`gfx1201`) hosts, AVX2 CPU baseline | Source-build candidate; hardware qualification pending |
 
 The DGX Spark image targets `deepseek-ai/DeepSeek-V4-Flash-0731`. Model weights
 are downloaded separately and should be pinned to the revision recorded in the
@@ -68,7 +68,7 @@ promotion workflow never rebuilds an image.
 ```text
 images/
   nvidia/dgx-spark/   ARM64 / GB10 / SM121 images
-  amd/rocm/           x64 ROCm images (reserved for future use)
+  amd/rocm/           x64 ROCm images (RDNA4 / gfx1201)
 scripts/              Manifest, source-overlay, and release validation
 .github/workflows/    Public-runner validation, builds, and promotion
 ```

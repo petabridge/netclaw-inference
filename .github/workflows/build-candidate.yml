@@ -21,6 +21,8 @@ jobs:
     name: Validate protected source
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      runner_label: ${{ steps.runner.outputs.label }}
     steps:
       - name: Require master
         run: |
@@ -43,10 +45,27 @@ jobs:
             exit 1
           fi
 
+      - name: Select build runner for target platform
+        id: runner
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+        run: |
+          platform="$(jq -r '.platform' "$MANIFEST_PATH")"
+          case "$platform" in
+            linux/amd64) label="ubuntu-24.04" ;;
+            linux/arm64) label="ubuntu-24.04-arm" ;;
+            *)
+              echo "Unsupported target platform: $platform" >&2
+              exit 1
+              ;;
+          esac
+          echo "Selected native runner '$label' for target platform '$platform'."
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build and publish candidate
     needs: validate
-    runs-on: ubuntu-24.04-arm
+    runs-on: ${{ needs.validate.outputs.runner_label }}
     environment: inference-image-build
     timeout-minutes: 720
     permissions:

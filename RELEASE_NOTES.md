@@ -10,9 +10,20 @@ images. Every release section lists the image ids affected by that release.
 Images:
 
 - `vllm-deepseek-v4-flash-0731-dspark-gb10`
+- `llama-cpp-rocm-gfx1201-avx2`
 
 Changes:
 
+- **Add the first AMD ROCm image: AVX2-baseline llama.cpp for gfx1201**
+  - Build `llama-server`/`llama-cli` from a pinned llama.cpp commit against a
+    digest-pinned ROCm 7.2.3 base, targeting the `gfx1201` (RDNA4) GPU backend.
+  - Compile the CPU backend at an explicit `x86-64-v3` (AVX2) baseline with all
+    AVX-512 paths disabled, so the binary runs on AVX2-only hosts that stock
+    upstream toolbox images crash on at startup.
+  - Fail the build if any AVX-512 opcode remains in the CPU backend.
+- **Select the candidate build runner from the manifest's target platform**
+  - Build `linux/amd64` images natively on x64 runners and `linux/arm64` images
+    on ARM64 runners, instead of hardcoding an ARM64 builder.
 - **Warm all observed DeepSeek V4 portable sparse-MLA layouts**
   - Add the production 512-wide Triton specialization to the existing 576-wide
     startup warmup for both 32- and 64-head TP-local layouts.
