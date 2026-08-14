@@ -93,7 +93,9 @@ RUN set -euxo pipefail; \
         -DLLAMA_BUILD_TESTS=OFF; \
     cmake --build build --config Release --parallel "$(nproc)"; \
     cmake --install build; \
-    install -D -m 0644 LICENSE /opt/llama.cpp/share/doc/llama.cpp/LICENSE
+    install -D -m 0644 LICENSE /opt/llama.cpp/share/doc/llama.cpp/LICENSE; \
+    echo "/opt/llama.cpp/lib" > /etc/ld.so.conf.d/petabridge-llama.conf; \
+    ldconfig
 
 # Regression guard: assert the CPU backend contains no AVX-512 (zmm) opcodes --
 # the exact failure mode this image exists to prevent. Fail loudly rather than
