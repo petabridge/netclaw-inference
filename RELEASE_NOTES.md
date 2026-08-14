@@ -28,6 +28,8 @@ Changes:
     single stage so those runtime libraries ship with `llama-server`.
   - Build the full default llama.cpp target set so `cmake --install` is
     consistent (and `libmtmd` is present for the `--mmproj` multimodal path).
+  - Register `/opt/llama.cpp/lib` with `ldconfig` so `llama-server` resolves
+    its own shared objects (e.g. `libllama-server-impl.so`) at run time.
 - **Select the candidate build runner from the manifest's target platform**
   - Build `linux/amd64` images natively on x64 runners and `linux/arm64` images
     on ARM64 runners, instead of hardcoding an ARM64 builder.
