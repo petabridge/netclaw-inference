@@ -21,6 +21,8 @@ Changes:
     AVX-512 paths disabled, so the binary runs on AVX2-only hosts that stock
     upstream toolbox images crash on at startup.
   - Fail the build if any AVX-512 opcode remains in the CPU backend.
+  - Run the image build under bash so the `pipefail` and `[[ ]]` build guards
+    execute instead of failing under the base image's `/bin/sh`.
 - **Select the candidate build runner from the manifest's target platform**
   - Build `linux/amd64` images natively on x64 runners and `linux/arm64` images
     on ARM64 runners, instead of hardcoding an ARM64 builder.
