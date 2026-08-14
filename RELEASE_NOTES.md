@@ -23,6 +23,9 @@ Changes:
   - Fail the build if any AVX-512 opcode remains in the CPU backend.
   - Run the image build under bash so the `pipefail` and `[[ ]]` build guards
     execute instead of failing under the base image's `/bin/sh`.
+  - Install the `rocblas-dev`/`hipblas-dev` ROCm math libraries so ggml-hip's
+    `find_package()` resolves and the runtime libraries are present; build in a
+    single stage so those runtime libraries ship with `llama-server`.
 - **Select the candidate build runner from the manifest's target platform**
   - Build `linux/amd64` images natively on x64 runners and `linux/arm64` images
     on ARM64 runners, instead of hardcoding an ARM64 builder.
