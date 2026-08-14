@@ -91,7 +91,7 @@ RUN set -euxo pipefail; \
         -DLLAMA_CURL=OFF \
         -DLLAMA_BUILD_SERVER=ON \
         -DLLAMA_BUILD_TESTS=OFF; \
-    cmake --build build --config Release --parallel "$(nproc)" --target llama-server llama-cli; \
+    cmake --build build --config Release --parallel "$(nproc)"; \
     cmake --install build; \
     install -D -m 0644 LICENSE /opt/llama.cpp/share/doc/llama.cpp/LICENSE
 
