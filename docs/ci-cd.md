@@ -12,7 +12,8 @@ provide the path to an enabled `image.json`. The workflow:
 
 1. validates the repository on a GitHub-hosted runner;
 2. enters the master-only `inference-image-build` environment;
-3. starts a native GitHub-hosted ARM64 runner;
+3. starts a native GitHub-hosted runner matching the manifest's target platform
+   (ARM64 for `linux/arm64`, x64 for `linux/amd64`);
 4. configures pinned BuildKit tooling for the manifest's target platform;
 5. builds and pushes `sha-<12-character commit>`;
 6. publishes BuildKit SBOM/provenance attestations;
@@ -46,8 +47,10 @@ independent exact-digest promotion workflow.
 
 ## Builder capacity
 
-Candidate builds use native GitHub-hosted ARM64 capacity. The first full build
-must establish whether the selected runner has sufficient memory and scratch
-space for the CUDA/vLLM source build; if it does not, move to a larger
-GitHub-hosted ARM64 runner without granting the repository private-network
-access.
+Candidate builds use native GitHub-hosted capacity matching the manifest's
+target platform: ARM64 runners for `linux/arm64` images and x64 runners for
+`linux/amd64` images. The first full build of a new image must establish
+whether the selected runner has sufficient memory and scratch space for its
+source build (CUDA/vLLM on ARM64, ROCm/llama.cpp on x64); if it does not, move
+to a larger GitHub-hosted runner of the same architecture without granting the
+repository private-network access.

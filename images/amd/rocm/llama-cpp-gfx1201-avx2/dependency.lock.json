@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "base_image": {
+    "reference": "rocm/dev-ubuntu-24.04",
+    "tag": "7.2.3",
+    "digest": "sha256:8ab378c7264c7e15496f548392c518a6b2feeb322d6233364c6c2ebc8e7ffb42",
+    "platform": "linux/amd64",
+    "role": "ROCm 7.2.3 toolchain (hipcc, rocBLAS, hipBLAS) and runtime libraries for gfx1201"
+  },
+  "source_build": {
+    "strategy": "pinned-upstream-source-full-build",
+    "llama_cpp": {
+      "repository": "https://github.com/ggml-org/llama.cpp",
+      "commit": "9b05354ec6fb58b4e665e9a39ebc40285c015638",
+      "build": "b10433",
+      "archive": "https://github.com/ggml-org/llama.cpp/archive/9b05354ec6fb58b4e665e9a39ebc40285c015638.tar.gz",
+      "archive_sha256": "3757add5ecea48727edf81b56d3e233eb82332d30ac475f23aa3efec4c647d1c",
+      "build_system": "cmake"
+    },
+    "native_artifacts": {
+      "mode": "built-from-source",
+      "reason": "Every inference binary in this image is compiled from the pinned llama.cpp commit; nothing is inherited prebuilt."
+    }
+  },
+  "build_config": {
+    "gpu_backend": "rocm-hip",
+    "gpu_targets": ["gfx1201"],
+    "gpu_hardware": "AMD Radeon AI PRO R9700 (RDNA4)",
+    "rocm_version": "7.2.3",
+    "cpu_isa_baseline": "x86-64-v3 (AVX, AVX2, FMA, F16C; AVX-512 disabled)",
+    "cmake_flags": {
+      "GGML_HIP": "ON",
+      "AMDGPU_TARGETS": "gfx1201",
+      "GGML_HIP_ROCWMMA_FATTN": "OFF",
+      "GGML_NATIVE": "OFF",
+      "GGML_AVX": "ON",
+      "GGML_AVX2": "ON",
+      "GGML_FMA": "ON",
+      "GGML_F16C": "ON",
+      "GGML_AVX512": "OFF",
+      "BUILD_SHARED_LIBS": "ON",
+      "LLAMA_CURL": "OFF",
+      "LLAMA_BUILD_SERVER": "ON"
+    },
+    "avx512_guard": "The build fails if libggml-cpu contains any AVX-512 (zmm) opcode."
+  },
+  "outputs": {
+    "binaries": ["llama-server", "llama-cli"],
+    "install_prefix": "/opt/llama.cpp"
+  },
+  "model": {
+    "included_in_image": false,
+    "note": "Engine image; GGUF model weights are provided at runtime through a read-only bind mount."
+  },
+  "license": {
+    "repository_material": "MIT",
+    "llama_cpp": "MIT",
+    "retained_in_image": "/opt/llama.cpp/share/doc/llama.cpp/LICENSE"
+  }
+}

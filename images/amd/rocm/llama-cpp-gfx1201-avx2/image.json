@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../schemas/image.schema.json",
+  "schema_version": 1,
+  "id": "llama-cpp-rocm-gfx1201-avx2",
+  "description": "AVX2-baseline llama.cpp ROCm llama-server for AMD RDNA4 (gfx1201) inference hosts",
+  "vendor": "amd",
+  "hardware_family": "rocm",
+  "platform": "linux/amd64",
+  "registry_repository": "petabridge/llama-cpp-rocm-gfx1201-avx2",
+  "build_enabled": true,
+  "context": "images/amd/rocm/llama-cpp-gfx1201-avx2",
+  "dockerfile": "images/amd/rocm/llama-cpp-gfx1201-avx2/Dockerfile"
+}
