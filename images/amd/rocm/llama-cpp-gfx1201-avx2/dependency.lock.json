@@ -28,6 +28,14 @@
     "gpu_hardware": "AMD Radeon AI PRO R9700 (RDNA4)",
     "rocm_version": "7.2.3",
     "cpu_isa_baseline": "x86-64-v3 (AVX, AVX2, FMA, F16C; AVX-512 disabled)",
+    "apt_build_packages": [
+      "build-essential",
+      "cmake",
+      "git",
+      "ca-certificates",
+      "rocblas-dev",
+      "hipblas-dev"
+    ],
     "cmake_flags": {
       "GGML_HIP": "ON",
       "AMDGPU_TARGETS": "gfx1201",
@@ -39,6 +47,7 @@
       "GGML_F16C": "ON",
       "GGML_AVX512": "OFF",
       "BUILD_SHARED_LIBS": "ON",
+      "CMAKE_PREFIX_PATH": "/opt/rocm",
       "LLAMA_CURL": "OFF",
       "LLAMA_BUILD_SERVER": "ON"
     },

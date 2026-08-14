@@ -3,9 +3,9 @@
 # AVX2-baseline llama.cpp server for AMD RDNA4 (gfx1201 / Radeon AI PRO R9700).
 #
 # WHY THIS IMAGE EXISTS: stock upstream llama.cpp ROCm toolbox images have been
-# shipping a libggml-cpu compiled with an AVX-512 CPU baseline. On inference
-# hosts whose CPUs provide AVX2 but not AVX-512, ggml_cpu_init() executes an
-# AVX-512 instruction at process startup and the server dies with an illegal
+# shipping a libggml-cpu compiled with an AVX-512 CPU baseline. On an inference
+# host whose CPU has AVX2 but not AVX-512, ggml_cpu_init() executes an AVX-512
+# instruction at process startup, and llama-server dies with an illegal
 # instruction (SIGILL) before it loads a model or touches the GPU. This image
 # rebuilds llama.cpp from a pinned upstream commit with an explicit AVX2
 # (x86-64-v3) CPU baseline -- AVX-512 disabled -- so the same binary runs on
@@ -16,19 +16,26 @@
 # by SHA-256 before the build. Every inference binary in the runtime is
 # compiled here from that pinned source -- nothing is inherited prebuilt. The
 # ROCm 7.2.3 base intentionally matches the proven-good production runtime.
+#
+# Single-stage: the ROCm dev base already carries the compiler, so a second
+# stage on the same base saves little; keeping one stage guarantees the rocBLAS
+# and hipBLAS runtime libraries llama-server links are present at run time.
 
-FROM rocm/dev-ubuntu-24.04@sha256:8ab378c7264c7e15496f548392c518a6b2feeb322d6233364c6c2ebc8e7ffb42 AS build
+FROM rocm/dev-ubuntu-24.04@sha256:8ab378c7264c7e15496f548392c518a6b2feeb322d6233364c6c2ebc8e7ffb42
 
 USER root
-WORKDIR /opt/petabridge/llama.cpp
-ENV PATH=/opt/rocm/bin:${PATH}
 
 # Run every build step under bash so `set -o pipefail` and [[ ]] work; the
 # base image's default /bin/sh is dash, which rejects both.
 SHELL ["/bin/bash", "-c"]
 
-# Build-only toolchain. The ROCm base already provides hipcc, rocBLAS, and
-# hipBLAS; add the generic C/C++ build tooling llama.cpp's CMake build needs.
+ENV PATH=/opt/rocm/bin:${PATH}
+WORKDIR /opt/petabridge/llama.cpp
+
+# Build toolchain plus the ROCm math libraries. The base image provides hipcc
+# and the HIP runtime, but not rocBLAS/hipBLAS -- the `-dev` packages supply
+# the CMake config files ggml-hip's find_package() needs and pull in the
+# runtime libraries llama-server dynamically links.
 RUN set -euxo pipefail; \
     export DEBIAN_FRONTEND=noninteractive; \
     apt-get update; \
@@ -36,7 +43,9 @@ RUN set -euxo pipefail; \
         build-essential \
         cmake \
         git \
-        ca-certificates; \
+        ca-certificates \
+        rocblas-dev \
+        hipblas-dev; \
     rm -rf /var/lib/apt/lists/*
 
 # Pinned, checksum-verified llama.cpp source (immutable upstream commit).
@@ -51,20 +60,21 @@ RUN set -euxo pipefail; \
     rm /tmp/llama.cpp.tar.gz
 
 # ROCm / HIP build targeting gfx1201, with an explicit AVX2 CPU baseline.
-#   GGML_NATIVE=OFF           -- do NOT use -march=native (the build runner's
-#                                CPU may have AVX-512; the deployment target
-#                                does not -- that mismatch is the whole bug)
-#   GGML_AVX/AVX2/FMA/F16C=ON  -- x86-64-v3 baseline
-#   GGML_AVX512*=OFF           -- the entire point: no AVX-512 in the CPU backend
+#   GGML_NATIVE=OFF            -- do NOT use -march=native (the build runner's
+#                                 CPU may have AVX-512; the deployment target
+#                                 does not -- that mismatch is the whole bug)
+#   GGML_AVX/AVX2/FMA/F16C=ON   -- x86-64-v3 baseline
+#   GGML_AVX512*=OFF            -- the entire point: no AVX-512 in the CPU backend
 #   GGML_HIP=ON + AMDGPU_TARGETS=gfx1201 -- RDNA4 GPU backend
-#   BUILD_SHARED_LIBS=ON       -- emit libggml-cpu.so so the AVX-512 guard below
-#                                 can inspect the CPU backend directly
+#   BUILD_SHARED_LIBS=ON        -- emit libggml-cpu.so so the AVX-512 guard can
+#                                  inspect the CPU backend directly
 RUN set -euxo pipefail; \
     export HIPCXX="$(hipconfig -l)/clang"; \
     export HIP_PATH="$(hipconfig -R)"; \
     cmake -S . -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/llama.cpp \
+        -DCMAKE_PREFIX_PATH=/opt/rocm \
         -DBUILD_SHARED_LIBS=ON \
         -DGGML_HIP=ON \
         -DAMDGPU_TARGETS=gfx1201 \
@@ -85,9 +95,9 @@ RUN set -euxo pipefail; \
     cmake --install build; \
     install -D -m 0644 LICENSE /opt/llama.cpp/share/doc/llama.cpp/LICENSE
 
-# Regression guard: assert the CPU backend contains no AVX-512 (zmm) opcodes.
-# This is the exact failure mode the image exists to prevent, so fail the build
-# loudly rather than ship a binary that would SIGILL on an AVX2-only host.
+# Regression guard: assert the CPU backend contains no AVX-512 (zmm) opcodes --
+# the exact failure mode this image exists to prevent. Fail loudly rather than
+# ship a binary that would SIGILL on an AVX2-only host.
 RUN set -euxo pipefail; \
     target="$(find /opt/llama.cpp -name 'libggml-cpu*.so*' -type f | head -n1)"; \
     if [[ -z "$target" ]]; then target=/opt/llama.cpp/bin/llama-server; fi; \
@@ -97,9 +107,11 @@ RUN set -euxo pipefail; \
     fi; \
     echo "Verified AVX2 baseline: no AVX-512 (zmm) opcodes in $target"
 
-FROM rocm/dev-ubuntu-24.04@sha256:8ab378c7264c7e15496f548392c518a6b2feeb322d6233364c6c2ebc8e7ffb42
-
-USER root
+# Standalone smoke check, then drop the source/build tree.
+RUN set -euxo pipefail; \
+    /opt/llama.cpp/bin/llama-server --help >/dev/null; \
+    cd /; \
+    rm -rf /opt/petabridge/llama.cpp
 
 LABEL org.opencontainers.image.title="Petabridge llama.cpp ROCm gfx1201 AVX2 server" \
       org.opencontainers.image.description="AVX2-baseline llama.cpp llama-server built from pinned source for AMD RDNA4 (gfx1201) ROCm hosts" \
@@ -115,16 +127,9 @@ LABEL org.opencontainers.image.title="Petabridge llama.cpp ROCm gfx1201 AVX2 ser
       io.petabridge.gpu.targets="gfx1201" \
       io.petabridge.cpu.baseline="x86-64-v3-avx2-no-avx512"
 
-COPY --from=build /opt/llama.cpp /opt/llama.cpp
 COPY dependency.lock.json /usr/local/share/petabridge/dependency.lock.json
 COPY attribution/ /usr/share/doc/netclaw-inference/
 
 ENV PATH=/opt/llama.cpp/bin:/opt/rocm/bin:${PATH}
-
-# Standalone smoke check: the server binary must load and print help without a
-# GPU present (this runs on a GPU-less build runner). Consumers supply the full
-# llama-server command (model path, ports, sampling) at runtime.
-RUN set -eux; \
-    llama-server --help >/dev/null
 
 WORKDIR /models
