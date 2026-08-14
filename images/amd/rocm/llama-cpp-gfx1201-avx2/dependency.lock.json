@@ -55,6 +55,7 @@
   },
   "outputs": {
     "binaries": ["llama-server", "llama-cli"],
+    "note": "The full default llama.cpp target set is compiled and installed (so cmake --install is consistent and libmtmd is available for --mmproj); llama-server and llama-cli are the binaries this image is used for.",
     "install_prefix": "/opt/llama.cpp"
   },
   "model": {
