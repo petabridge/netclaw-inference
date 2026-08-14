@@ -23,6 +23,10 @@ USER root
 WORKDIR /opt/petabridge/llama.cpp
 ENV PATH=/opt/rocm/bin:${PATH}
 
+# Run every build step under bash so `set -o pipefail` and [[ ]] work; the
+# base image's default /bin/sh is dash, which rejects both.
+SHELL ["/bin/bash", "-c"]
+
 # Build-only toolchain. The ROCm base already provides hipcc, rocBLAS, and
 # hipBLAS; add the generic C/C++ build tooling llama.cpp's CMake build needs.
 RUN set -euxo pipefail; \
@@ -41,8 +45,6 @@ RUN set -euxo pipefail; \
 ADD --checksum=sha256:3757add5ecea48727edf81b56d3e233eb82332d30ac475f23aa3efec4c647d1c \
     https://github.com/ggml-org/llama.cpp/archive/9b05354ec6fb58b4e665e9a39ebc40285c015638.tar.gz \
     /tmp/llama.cpp.tar.gz
-
-SHELL ["/bin/bash", "-c"]
 
 RUN set -euxo pipefail; \
     tar --extract --gzip --file /tmp/llama.cpp.tar.gz --strip-components=1; \
