@@ -1,0 +1,1251 @@
+#!/usr/bin/env python3
+"""Static + dry-run regression for the two-rank launcher (start.sh).
+
+Hardening asked for by the production-like tester run on PRs #83/#84:
+
+  A  GLM53_APC_RETENTION_INTERVAL_SWA guard -- "" (inherit global) passes in every
+     serving mode. Non-empty values require SPEC_METHOD=dflash; 0 passes and
+     anything else must be a positive multiple of 3584 no larger than
+     1,000,000. The canonical value is what the ranks receive. Runs on the
+     checkout whose launcher actually forwards that knob to the containers
+     (detected from the `-e VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA=` line,
+     not guessed).
+  B  Pre-stop gate -- `./start.sh restart` with a bad knob, or with ANY
+     mounted overlay missing / empty / unparseable / pointed at a different
+     overlay, exits 2 BEFORE the first docker or ssh call, so healthy
+     containers are never stopped for a launch that cannot succeed.
+  C  Overlay order -- one list (GLM53_OVERLAY_ORDER) pinned
+     hybrid -> per-group -> no-store -> kv-capacity-log is emitted into BOTH
+     rank inner scripts.
+  D  Rank parity -- for every /opt/glm53 patch the head bind-mounts host
+     file S, the worker's mount is fed from /tmp/X and the scp that produced
+     /tmp/X read the same S; both ranks receive identical effective retention,
+     no-store, KV-capacity-log, thin-decode and cache-reset values;
+     a knob the launcher wires must be PRESENT on both ranks, not merely
+     equal. The comparison itself is exercised with a synthetic one-rank
+     mismatch so a silent pass cannot hide behind equality.
+  E  Host template interpreter selection -- caller PATH, fallback order, strict
+     explicit overrides, and actual Jinja parse failures before either stop.
+
+Everything drives the shipped start.sh under bash from an allow-listed
+environment (PATH with docker / ssh / scp / rsync / curl / ip / nvidia-smi
+stubbed first, HOME pointed at a temp dir, no BASH_ENV / PYTHONPATH / HF_*
+/ GLM53_* / VLLM_* leakage). Nothing talks to a real host. The test is
+branch-agnostic: it discovers which prefix-cache overlays this checkout
+ships from the `*_PATCH_HOST="${*_PATCH_HOST:-` assignments and reports it.
+
+Every stub appends one record per invocation under an flock on the log: the
+stop path runs the worker ssh in the background while the head docker calls
+run in the foreground, so unserialized writers merge their fields into one
+line and the lost record reads as "the worker was never torn down". A record
+that is empty or starts with an unstubbed tool now fails the run outright.
+
+A recorded call is read as the argv the launcher executed: a container is
+stopped only by a kill / rm whose operand IS its configured name (a `-backup`
+sibling is a different container) and removed only by rm. The stop phase is
+bracketed by an explicit record -- start.arm.sh runs the recording stub as the
+first statement of the launcher's own start_unlocked() -- so a read-only
+`docker ps` inside stop_containers() is not mistaken for start-arm entry, while
+a worker teardown that has not finished (a dropped `wait`) still lands after it.
+
+Run:  python3 tests/test_launcher_rank_parity.py   (or pytest)
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+START = ROOT / "start.sh"
+
+FAILURES: list[str] = []
+
+BLOCK = 3584
+SWA = "GLM53_APC_RETENTION_INTERVAL_SWA"
+SWA_FORWARD = '-e "VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA=$GLM53_APC_RETENTION_INTERVAL_SWA"'
+NS = "GLM53_APC_NO_STORE"
+NS_FORWARD = '-e "GLM53_APC_NO_STORE=$GLM53_APC_NO_STORE"'
+# Cache-reset exposure stays opt-in because these dev routes sit outside
+# the bearer guard. Both ranks must receive the same gate value.
+CR = "GLM53_EXPOSE_CACHE_RESET"
+KV = "GLM53_KV_CAPACITY_LOG"
+KV_FORWARD = '-e "GLM53_KV_CAPACITY_LOG=$GLM53_KV_CAPACITY_LOG"'
+# Opt-in thin EXL3 decode dispatch: wired on both ranks (head explicitly, worker
+# through the serve_env list). A one-rank miss would silently disable the kernel on
+# that rank, so the scenarios below always require it.
+THIN = "GLM53_EXL3_MOE_FAST"
+# Opt-in large-M KDA BF16 prefill path: same both-ranks contract as THIN. A
+# one-rank miss would silently leave that rank on Marlin, so the scenarios
+# below always require it.
+LARGE_M = "GLM53_KDA_BF16_LARGE_M"
+PREFILL_BF16 = "GLM53_DENSE_EXL3_PREFILL_BF16"
+
+# Launcher knobs and the container-side names they map to.
+LAUNCHER_KNOBS = ("GLM53_APC_RETENTION_INTERVAL", SWA, NS, KV, THIN,
+                  LARGE_M, PREFILL_BF16, "GLM53_DENSE_EXL3")
+CONTAINER_NAMES = LAUNCHER_KNOBS + (
+    "VLLM_PREFIX_CACHE_RETENTION_INTERVAL",
+    "VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA",
+    CR,
+)
+
+# Ships on its own (kv_cache_utils.py only, log-only; no coordinator anchors).
+# Where listed it must follow patch_glm5_drafter_group.py (same file) and the
+# per-group retention slot.
+KVCAP = "patch_kv_capacity_log.py"
+DRAFTER = "patch_glm5_drafter_group.py"
+APC_HOST_VARS = {
+    "APC_PATCH_HOST": "patch_hybrid_prefix_hit.py",
+    "PERGROUP_PATCH_HOST": "patch_apc_per_group_retention.py",
+    "NOSTORE_PATCH_HOST": "patch_apc_no_store.py",
+    "KVCAP_PATCH_HOST": KVCAP,
+}
+
+SEP = "\x1f"
+
+STUB_TOOLS = ("docker", "ssh", "scp", "rsync", "curl", "ip", "nvidia-smi")
+
+# The explicit start-arm boundary record: Harness builds start.arm.sh, which
+# runs the recording stub as the first statement of the launcher's own
+# start_unlocked(), through the same flocked append as every host call. The
+# phase boundary is therefore ordered with those calls instead of being inferred
+# from a call's shape.
+START_ARM = "start-arm"
+RECORDED_TOOLS = STUB_TOOLS + (START_ARM,)
+
+# The container names this harness configures and asserts: it passes them in the
+# environment (a caller export beats .env), so no assertion depends on parsing a
+# default out of start.sh, and the launcher has to act on the configured names.
+HEAD_CONTAINER = "glm53-exl3-head"
+WORKER_CONTAINER = "glm53-exl3-worker"
+
+# One record per invocation, appended under an flock on the log itself.
+# stop_containers() runs the worker ssh in the background while the head docker
+# calls run in the foreground, so two stubs append at the same time; without the
+# lock their fields interleave into a single line and the missing record is read
+# as "the worker was never torn down". The lock is held on fd 8 for the write
+# and released when the stub exits.
+STUB = """#!/usr/bin/env bash
+# Records every invocation; never touches a host.
+tool="${0##*/}"
+# GLM53_STUB_SSH_DELAY models a worker teardown that takes time to finish: the
+# record lands when the command ends, exactly as the real ssh's does. The
+# harness sets it only to prove that a returned stop_containers() has already
+# covered the backgrounded worker teardown.
+if [ -n "${GLM53_STUB_SSH_DELAY:-}" ] && [ "$tool" = "ssh" ]; then sleep "$GLM53_STUB_SSH_DELAY"; fi
+exec 8>>"$GLM53_STUB_LOG"
+flock 8
+{ printf '%s\\x1f' "$tool" "$@"; printf '\\n'; } >&8
+case "$tool" in
+    ip) printf 'inet %s/24\\n' "${GLM53_STUB_HEAD_IP:-10.0.0.1}" ;;
+esac
+exit 0
+"""
+
+
+def check(cond: bool, label: str) -> None:
+    print(("  ok   " if cond else "  FAIL ") + label)
+    if not cond:
+        FAILURES.append(label)
+
+
+def source() -> str:
+    return START.read_text()
+
+
+def guard_source() -> str:
+    """start.sh's numeric-config guard, lifted out by its sentinels (same
+    technique as tests/test_numeric_config.py)."""
+    text = source()
+    begin = text.index("# GLM53 numeric config guard (begin)")
+    end_marker = "# GLM53 numeric config guard (end)"
+    end = text.index(end_marker, begin) + len(end_marker)
+    return text[begin:end]
+
+
+def base_env(**extra: str) -> dict[str, str]:
+    """Allow-listed environment: nothing from the developer/CI shell leaks in
+    (no BASH_ENV, PYTHONPATH, HF_HOME, EXTRA_ARGS, SKIP_*, *_PATCH_HOST ...)."""
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", "/"),
+        "USER": "glm53-parity",
+        "LC_ALL": "C",
+        "TERM": "dumb",
+    }
+    env.update(extra)
+    return env
+
+
+def host_vars() -> dict[str, str]:
+    """Every `<NAME>_PATCH_HOST="${<NAME>_PATCH_HOST:-$SCRIPT_DIR/overlay/<file>}"`
+    assignment in start.sh, from the real assignment, not from substring hits."""
+    out: dict[str, str] = {}
+    for m in re.finditer(
+        r'^([A-Z0-9_]+_(?:PATCH|OVERLAY)_HOST)="\$\{\1:-\$SCRIPT_DIR/overlay/([A-Za-z0-9_.]+)\}"$', source(), re.M
+    ):
+        out[m.group(1)] = m.group(2)
+    return out
+
+
+def shipped_apc_vars() -> dict[str, str]:
+    return {v: b for v, b in host_vars().items() if v in APC_HOST_VARS}
+
+
+def wires_swa() -> bool:
+    return SWA_FORWARD in source()
+
+
+def wires_ns() -> bool:
+    return NS_FORWARD in source()
+
+
+def wires_kv() -> bool:
+    return KV_FORWARD in source()
+
+
+# ------------------------------------------------------------------ part A --
+
+
+def run_retention_guard(
+    value: str | None, spec_method: str = "dflash"
+) -> tuple[int, str, str]:
+    script = (
+        guard_source()
+        + "\nGPU_MEM_UTIL=0.87; MAX_MODEL_LEN=1000000; MAX_NUM_SEQS=4\n"
+        + "MAX_NUM_BATCHED_TOKENS=1024\n"
+        + "GLM53_INDEXER_WORKSPACE=stock; GLM53_SPINWAIT_MS=stock\n"
+        + f"{NS}=1\n"
+        + "validate_numeric_config || exit $?\n"
+        + f'printf "%s\\n" "${{{SWA}-unset}}"\n'
+    )
+    env = base_env(SPEC_METHOD=spec_method)
+    if value is not None:
+        env[SWA] = value
+    r = subprocess.run(["bash", "-c", script], text=True, capture_output=True, env=env)
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+
+def run_no_store_guard(value: str) -> tuple[int, str, str]:
+    """Exercise explicit no-store values through the lifted numeric guard."""
+    script = (
+        guard_source()
+        + "\nGPU_MEM_UTIL=0.87; MAX_MODEL_LEN=1000000; MAX_NUM_SEQS=4\n"
+        + "MAX_NUM_BATCHED_TOKENS=1024\n"
+        + "GLM53_INDEXER_WORKSPACE=stock; GLM53_SPINWAIT_MS=stock\n"
+        + "validate_numeric_config || exit $?\n"
+        + 'printf "%s\\n" "$GLM53_APC_NO_STORE"\n'
+    )
+    env = base_env(SPEC_METHOD="none", **{NS: value})
+    r = subprocess.run(["bash", "-c", script], text=True, capture_output=True, env=env)
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+
+def part_a() -> None:
+    print("Part A: GLM53_APC_RETENTION_INTERVAL_SWA guard (numeric config block)")
+    if not wires_swa():
+        print("  skip A1-A3 (knob not forwarded by this checkout; validate-what-you-forward)")
+        return
+    accepted = {
+        None: "unset",
+        "": "",
+        "0": "0",
+        "00": "0",
+        str(BLOCK): str(BLOCK),
+        "0014336": "14336",
+        str(279 * BLOCK): str(279 * BLOCK),  # 999,936 = largest legal value
+    }
+    for value, canonical in accepted.items():
+        rc, out, err = run_retention_guard(value)
+        check(
+            rc == 0 and out == canonical,
+            f"A2 {SWA}={value!r} accepted, ranks receive {canonical!r} (rc={rc} out={out!r} {err})",
+        )
+    rejected = [
+        "1", "3000", "3585", "1000000", str(280 * BLOCK), "-3584", "+3584",
+        "3584.0", "1e3", " 3584", "3584 ", "3584\r", "nope", "0x", "0 ",
+        "99999999999999999999",
+    ]
+    for value in rejected:
+        rc, out, err = run_retention_guard(value)
+        check(
+            rc == 2 and SWA in err,
+            f"A3 {SWA}={value!r} rejected with rc=2 and a named error (rc={rc} err={err[:60]!r})",
+        )
+    for spec_method in ("mtp", "none"):
+        for value, expected in ((None, "unset"), ("", "")):
+            rc, out, err = run_retention_guard(value, spec_method)
+            check(
+                rc == 0 and out == expected,
+                f"A4 {SWA}={value!r} accepted with SPEC_METHOD={spec_method} "
+                f"(rc={rc} out={out!r} {err})",
+            )
+        for value in ("0", str(BLOCK)):
+            rc, out, err = run_retention_guard(value, spec_method)
+            check(
+                rc == 2 and SWA in err and "SPEC_METHOD=dflash" in err,
+                f"A4 {SWA}={value!r} rejected with SPEC_METHOD={spec_method} "
+                f"before launch (rc={rc} err={err[:80]!r})",
+            )
+
+
+# ------------------------------------------- part F (no-store kill switch) --
+
+
+def part_f() -> None:
+    """`GLM53_APC_NO_STORE` is a kill switch, not a truthy knob: exactly 0 or 1,
+    and an explicitly empty caller value is an operator error -- the generic
+    caller-exports-win rule (start.sh) is what carries it past .env."""
+    print(f"Part F: {NS} kill switch through the numeric-config guard")
+    if not wires_ns():
+        print("  skip F (knob not forwarded by this checkout)")
+        return
+    for value, canonical in (("0", "0"), ("1", "1")):
+        rc, out, err = run_no_store_guard(value)
+        check(
+            rc == 0 and out == canonical,
+            f"F1 {NS}={value!r} accepted, ranks receive {canonical!r} (rc={rc} out={out!r} {err})",
+        )
+    for value in ("", "2", "yes", "true", "TRUE", "01", "-1", "1.0", " 1", "1 "):
+        rc, out, err = run_no_store_guard(value)
+        check(
+            rc == 2 and NS in err,
+            f"F2 {NS}={value!r} rejected with rc=2 and a named error (rc={rc} err={err[:60]!r})",
+        )
+
+
+# ------------------------------------- part G (compact draft pages gate) --
+
+COMPACT = "GLM53_DRAFT_KV_COMPACT"
+
+
+def compact_default_block() -> str:
+    """The conditional GLM53_DRAFT_KV_COMPACT default, lifted from start.sh
+    (same technique as guard_source)."""
+    m = re.search(
+        r'(?ms)^if \[ "\$SPEC_METHOD" = "dflash" \]; then\n'
+        r"\s+GLM53_DRAFT_KV_COMPACT=.*?\nfi$",
+        source(),
+    )
+    assert m, "conditional GLM53_DRAFT_KV_COMPACT default not found in start.sh"
+    return m.group(0)
+
+
+def run_compact_guard(value: str | None, spec_method: str) -> tuple[int, str, str]:
+    script = (
+        guard_source()
+        + "\nGPU_MEM_UTIL=0.87; MAX_MODEL_LEN=1000000; MAX_NUM_SEQS=4\n"
+        + "MAX_NUM_BATCHED_TOKENS=1024\n"
+        + "GLM53_INDEXER_WORKSPACE=stock; GLM53_SPINWAIT_MS=stock\n"
+        + f"{NS}=1\n"
+    )
+    env = base_env(SPEC_METHOD=spec_method)
+    if value is None:
+        # Unset: the launcher's own conditional default decides.
+        script += compact_default_block() + "\n"
+    else:
+        env[COMPACT] = value
+    script += (
+        "validate_numeric_config || exit $?\n"
+        + f'printf "%s\\n" "${COMPACT}"\n'
+    )
+    r = subprocess.run(["bash", "-c", script], text=True, capture_output=True, env=env)
+    return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+
+def part_g() -> None:
+    """`GLM53_DRAFT_KV_COMPACT` defaults to 1 only for the DFlash drafter; an
+    explicit 0 opts out everywhere, an explicitly empty value is an operator
+    error, and 1 stays DFlash-only: the coordinator's boundary lookup relies
+    on DFlash's per-position context KV, so the launcher rejects it before
+    any host action unless SPEC_METHOD=dflash."""
+    print(f"Part G: {COMPACT} conditional default and SPEC_METHOD=dflash gate")
+    if f'-e "{COMPACT}=' not in source():
+        print("  skip G (knob not forwarded by this checkout)")
+        return
+    for spec_method in ("dflash", "mtp", "none"):
+        rc, out, err = run_compact_guard("0", spec_method)
+        check(
+            rc == 0 and out == "0",
+            f"G1 {COMPACT}=0 accepted with SPEC_METHOD={spec_method} (rc={rc} out={out!r} {err})",
+        )
+    rc, out, err = run_compact_guard("1", "dflash")
+    check(rc == 0 and out == "1", f"G2 {COMPACT}=1 accepted with SPEC_METHOD=dflash (rc={rc} {err})")
+    for spec_method in ("mtp", "none"):
+        rc, out, err = run_compact_guard("1", spec_method)
+        check(
+            rc == 2 and COMPACT in err and "SPEC_METHOD=dflash" in err,
+            f"G3 {COMPACT}=1 rejected with SPEC_METHOD={spec_method} before launch "
+            f"(rc={rc} err={err[:80]!r})",
+        )
+    rc, out, err = run_compact_guard(None, "dflash")
+    check(
+        rc == 0 and out == "1",
+        f"G4 unset {COMPACT} defaults to 1 with SPEC_METHOD=dflash (rc={rc} out={out!r} {err})",
+    )
+    for spec_method in ("mtp", "none"):
+        rc, out, err = run_compact_guard(None, spec_method)
+        check(
+            rc == 0 and out == "0",
+            f"G5 unset {COMPACT} defaults to 0 with SPEC_METHOD={spec_method} "
+            f"(rc={rc} out={out!r} {err})",
+        )
+    for spec_method in ("dflash", "mtp", "none"):
+        rc, out, err = run_compact_guard("", spec_method)
+        check(
+            rc == 2 and COMPACT in err,
+            f"G6 explicitly empty {COMPACT} rejected with SPEC_METHOD={spec_method} "
+            f"(rc={rc} err={err[:80]!r})",
+        )
+
+
+# --------------------------------------------------------------- harness --
+
+
+class Harness:
+    """A throwaway copy of the launcher checkout plus a stub PATH."""
+
+    def __init__(self, tmp: Path, launcher: str = "start.sh") -> None:
+        self.tmp = tmp
+        self.repo = tmp / "repo"
+        self.repo.mkdir()
+        shutil.copy2(ROOT / launcher, self.repo / "start.sh")
+        shutil.copy2(ROOT / ".env.example", self.repo / ".env.example")
+        (self.repo / ".env").write_text((ROOT / ".env.example").read_text())
+        if launcher != "start.sh":
+            topology = launcher.removeprefix("start-").removesuffix(".sh")
+            template = ROOT / f".env.{topology}.example"
+            shutil.copy2(template, self.repo / template.name)
+            shutil.copy2(template, self.repo / f".env.{topology}")
+        for sub in ("overlay", "files", "ablit"):
+            if (ROOT / sub).is_dir():
+                shutil.copytree(ROOT / sub, self.repo / sub)
+        self.home = tmp / "home"
+        self.home.mkdir()
+        self.bin = tmp / "bin"
+        self.bin.mkdir()
+        # The stubs serialize their record writes with flock so a concurrent
+        # invocation cannot interleave fields into one line.
+        assert shutil.which("flock"), "flock is required by the recording stubs"
+        for tool in RECORDED_TOOLS:
+            p = self.bin / tool
+            p.write_text(STUB)
+            p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        self.log = tmp / "calls.log"
+
+        # The container names this harness configures -- and the ones it asserts
+        # on. Caller exports win over .env, so the launcher has to act on them.
+        # The tp3/tp4 copies keep the container names from their own .env; no
+        # assertion here reads them.
+        self.container_env = (
+            {"CONTAINER_HEAD": HEAD_CONTAINER, "CONTAINER_WORKER": WORKER_CONTAINER}
+            if launcher == "start.sh" else {}
+        )
+
+        # A copy whose trailing `main "$@"` is replaced by `"$@"`, so a single
+        # launcher function can be driven with the real configuration preamble.
+        text = (self.repo / "start.sh").read_text()
+        assert text.rstrip().endswith('\nmain "$@"'), "start.sh must end with main \"$@\""
+        (self.repo / "start.fn.sh").write_text(text.rstrip()[: -len('main "$@"')] + '"$@"\n')
+
+        # A copy whose start_unlocked() records the start-arm boundary as its
+        # first statement. The stop phase is over exactly when that record lands,
+        # which is what control() compares the container stops against.
+        if launcher == "start.sh":
+            needle = "start_unlocked() {\n"
+            assert text.count(needle) == 1, "start_unlocked() is not defined exactly once"
+            (self.repo / "start.arm.sh").write_text(
+                text.replace(needle, needle + '    "$GLM53_STUB_ARM"\n')
+            )
+
+    def env(self, **extra: str) -> dict[str, str]:
+        return base_env(
+            PATH=f"{self.bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
+            HOME=str(self.home),
+            GLM53_STUB_LOG=str(self.log),
+            GLM53_STUB_ARM=str(self.bin / START_ARM),
+            # host_memory_hygiene is not what this harness exercises; without
+            # this its pre-launch wait runs 45 x 2 s per scenario on a host
+            # whose MemAvailable is below GPU_MEM_UTIL x total (sudo is not
+            # stubbed here), timing the suite out.
+            GLM53_HOST_MEM_HYGIENE="0",
+            **self.container_env,
+            **extra,
+        )
+
+    def calls(self) -> list[list[str]]:
+        if not self.log.exists():
+            return []
+        out = []
+        for line in self.log.read_text().splitlines():
+            argv = line.split(SEP)
+            if argv and argv[-1] == "":
+                argv.pop()
+            # An empty record, or one that starts with something the harness
+            # never stubbed, means a field was lost or two invocations were
+            # written into one line. Every caller would read that missing
+            # record as "the launcher did not do it", so fail loudly instead.
+            if not argv or argv[0] not in RECORDED_TOOLS:
+                raise RuntimeError(
+                    f"corrupt stub record {argv!r} in {self.log}: records are "
+                    f"one flocked write per invocation, so a merged or empty "
+                    f"record is a harness fault, not a launcher result"
+                )
+            out.append(argv)
+        return out
+
+    def run(self, cmd: str, entry: str = "start.sh", **extra: str) -> subprocess.CompletedProcess[str]:
+        if self.log.exists():
+            self.log.unlink()
+        return subprocess.run(
+            ["bash", f"./{entry}", cmd],
+            cwd=self.repo,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=self.env(**extra),
+        )
+
+    def host_touching_calls(self) -> list[list[str]]:
+        return [c for c in self.calls() if c and c[0] in ("docker", "ssh", "scp", "rsync")]
+
+
+# ------------------------------------------------------------------ part B --
+
+
+def parses(text: str) -> bool:
+    import ast
+    try:
+        ast.parse(text)
+        return True
+    except SyntaxError:
+        return False
+
+
+def longest_parseable_prefix(text: str) -> str | None:
+    lines = text.splitlines(keepends=True)
+    for cut in range(len(lines) - 1, 0, -1):
+        candidate = "".join(lines[:cut])
+        if candidate.strip() and parses(candidate):
+            return candidate
+    return None
+
+
+def docker_argv(call: list[str]) -> list[str]:
+    """Keep the executable and shell command boundaries in recorded teardown."""
+    if call[0] == "docker":
+        return call
+    if call[0] == "ssh" and len(call) > 1:
+        lexer = shlex.shlex(call[-1], posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        return list(lexer)
+    return []
+
+
+def runs_verb_on(argv: list[str], verb: str, name: str) -> bool:
+    """True when this docker argv runs `verb` on exactly `name`: the operand is
+    the first non-flag argument of that verb and has to match in full, so
+    `glm53-exl3-head-backup` is a different container and never this one."""
+    for i, token in enumerate(argv):
+        if token != verb or i == 0 or argv[i - 1] != "docker":
+            continue
+        if i != 1 and argv[i - 2] not in (";", "&&", "||"):
+            continue
+        for operand in argv[i + 1:]:
+            if not operand.startswith("-"):
+                if operand == name:
+                    return True
+                break
+    return False
+
+
+def removes_container(call: list[str], name: str) -> bool:
+    """True when the recorded call removes exactly `name` (`docker rm`). A kill
+    stops a container but leaves it behind, so it never satisfies a removal.
+
+    tests/test_bringup_robustness.py's lifecycle fixture reads its own recorder's
+    argv (same tool-then-argv shape) through this predicate, so the two suites
+    cannot drift into different notions of "removed"."""
+    return runs_verb_on(docker_argv(call), "rm", name)
+
+
+def stops_container(call: list[str], name: str) -> bool:
+    """True when the recorded call stops or removes exactly `name` (kill / rm)."""
+    argv = docker_argv(call)
+    return runs_verb_on(argv, "rm", name) or runs_verb_on(argv, "kill", name)
+
+
+def removal_facts(calls: list[list[str]]) -> tuple[bool, bool]:
+    """(head removed by a local docker call, worker removed over ssh -- the
+    worker only exists on the other host)."""
+    return (
+        any(c[0] == "docker" and removes_container(c, HEAD_CONTAINER) for c in calls),
+        any(c[0] == "ssh" and removes_container(c, WORKER_CONTAINER) for c in calls),
+    )
+
+
+def stop_phase_ends_first(calls: list[list[str]]) -> tuple[bool, list[int], list[int]]:
+    """(every container stop precedes the start arm, stop call indices, boundary
+    indices). The boundary is the recorded start_unlocked() entry, not "the first
+    call that is not a teardown": read-only inspection (a docker ps inside
+    stop_containers()) is allowed before or during the teardown, while the
+    backgrounded worker teardown still has to be covered by the wait before that
+    entry -- with GLM53_STUB_SSH_DELAY its record lands after it otherwise."""
+    stops = [
+        i
+        for i, c in enumerate(calls)
+        if stops_container(c, HEAD_CONTAINER) or stops_container(c, WORKER_CONTAINER)
+    ]
+    boundary = [i for i, c in enumerate(calls) if c[0] == START_ARM]
+    return bool(stops) and bool(boundary) and max(stops) < min(boundary), stops, boundary
+
+
+def control(h: Harness, label: str, **env: str) -> None:
+    """A valid configuration passes the pre-stop gate: both ranks are removed,
+    and the stop phase is over before the start arm is entered. The launch then
+    dies in the stubbed preflight (its ssh GID probe prints nothing), which is
+    expected and deliberately not what this control asserts."""
+    r = h.run("restart", entry="start.arm.sh", **env)
+    calls = h.calls()
+    head_removed, worker_removed = removal_facts(calls)
+    ordered, stops, boundary = stop_phase_ends_first(calls)
+    check(
+        head_removed and worker_removed,
+        f"{label} (head removed={head_removed}, worker removed over ssh={worker_removed}; "
+        f"rc={r.returncode} is the stubbed preflight)",
+    )
+    check(
+        ordered,
+        f"{label}: the stop phase ends before the start arm "
+        f"(container stops at {stops}, start arm at {boundary})",
+    )
+
+
+def part_b(h: Harness) -> None:
+    print("Part B: restart fails closed before any container is stopped")
+    vars_ = host_vars()
+    shipped = shipped_apc_vars()
+
+    # Control FIRST: with a valid configuration the entrypoint gets PAST the
+    # validators and reaches stop (the stubs then fail preflight, which is
+    # fine). Without this, every negative case below could pass for the
+    # wrong reason (a guard that refuses everything).
+    control(h, "B3 control: valid restart passes the gate and reaches stop on both ranks")
+    # Teardown completion, not just initiation: the ssh stub records only after a
+    # bounded delay, so a worker record that still precedes the start arm proves
+    # stop_containers() returned only once the backgrounded worker teardown had
+    # finished (a dropped `wait` puts the record after the start arm's calls).
+    control(
+        h,
+        "B3 control: the worker teardown has finished before the start arm runs",
+        GLM53_STUB_SSH_DELAY="0.35",
+    )
+    if wires_swa():
+        control(
+            h,
+            "B3 empty SWA override with MTP reaches stop on both ranks",
+            SPEC_METHOD="mtp",
+            **{SWA: ""},
+        )
+    if wires_ns():
+        control(
+            h,
+            f"B3 {NS}=0 (valid kill switch: requests keep their stores) reaches stop on both ranks",
+            **{NS: "0"},
+        )
+
+    def fails_closed(label: str, **env: str) -> None:
+        r = h.run("restart", **env)
+        calls = h.calls()
+        last = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else ""
+        check(
+            r.returncode == 2 and not calls,
+            f"{label}: rc={r.returncode}, invocations={len(calls)} ({last[:90]!r})",
+        )
+
+    if wires_swa():
+        fails_closed(f"B3 restart with {SWA}=3000 exits 2 before any host call", **{SWA: "3000"})
+        fails_closed(f"B3 restart with {SWA}=1003520 exits 2 before any host call", **{SWA: "1003520"})
+        fails_closed(
+            f"B3 restart with MTP and {SWA}=0 exits 2 before any host call",
+            SPEC_METHOD="mtp",
+            **{SWA: "0"},
+        )
+        fails_closed(
+            f"B3 restart without speculation and {SWA}={BLOCK} exits 2 before any host call",
+            SPEC_METHOD="none",
+            **{SWA: str(BLOCK)},
+        )
+    if wires_ns():
+        fails_closed(f"B3 restart with {NS}=yes exits 2 before any host call", **{NS: "yes"})
+        fails_closed(
+            f"B3 restart with an explicitly empty {NS} exits 2 before any host call",
+            **{NS: ""},
+        )
+    if wires_kv():
+        fails_closed(f"B3 restart with {KV}=yes exits 2 before any host call", **{KV: "yes"})
+        fails_closed(f"B3 restart with {KV}= (explicitly empty) exits 2 before any host call", **{KV: ""})
+
+    broken = h.tmp / "broken_patch.py"
+    broken.write_text("def (:\n    pass\n")
+    empty = h.tmp / "empty_patch.py"
+    empty.write_text("")
+    video = h.repo / "overlay" / "patch_glm_video_placeholders.py"
+    hybrid = h.repo / "overlay" / "patch_hybrid_prefix_hit.py"
+    for var, base in vars_.items():
+        wrong = hybrid if base == video.name else video
+        fails_closed(f"B4 {var} missing ({base})", **{var: str(h.tmp / "does-not-exist.py")})
+        fails_closed(f"B4 {var} pointed at a different overlay ({wrong.name})", **{var: str(wrong)})
+    blank = h.tmp / "whitespace_only.py"
+    blank.write_text("\n   \n\t\n")
+    for var, base in shipped.items():
+        fails_closed(f"B4 {var} empty file ({base})", **{var: str(empty)})
+        fails_closed(f"B4 {var} whitespace-only file ({base}; pipefail-safe rc=2 diagnostic)", **{var: str(blank)})
+        fails_closed(f"B4 {var} unparseable file ({base})", **{var: str(broken)})
+    if wires_swa():
+        current = h.repo / "overlay" / "patch_apc_per_group_retention.py"
+        stale = h.tmp / "stale_pergroup_patch.py"
+        stale.write_text(
+            current.read_text().replace(
+                "glm53-apc-per-group-contract:explicit-v1",
+                "glm53-apc-per-group-contract:auto-v0",
+            )
+        )
+        fails_closed(
+            "B4 stale per-group retention contract",
+            PERGROUP_PATCH_HOST=str(stale),
+        )
+    # Truncation: for EVERY guarded Python artifact, the longest strict prefix
+    # (by lines) that still parses. It carries the identity string and is
+    # valid Python, so only the EOF-sentinel check can refuse it -- and must.
+    guarded = {var: h.repo / "overlay" / base for var, base in vars_.items()}
+    guarded["overlay/patch_ablit.py"] = h.repo / "overlay" / "patch_ablit.py"
+    guarded["overlay/ablit_runtime.py"] = h.repo / "overlay" / "ablit_runtime.py"
+    for var, path in guarded.items():
+        prefix_text = longest_parseable_prefix(path.read_text())
+        check(prefix_text is not None and parses(prefix_text), f"B4 {path.name}: a strict prefix that still parses exists ({len(prefix_text.splitlines()) if prefix_text else 0} lines)")
+        if prefix_text is None:
+            continue
+        if var.startswith("overlay/"):
+            original = path.read_text()
+            path.write_text(prefix_text)
+            try:
+                fails_closed(f"B4 {path.name} truncated to its longest parseable prefix (fixed-path artifact)")
+            finally:
+                path.write_text(original)
+        else:
+            prefix = h.tmp / f"truncated_{path.name}"
+            prefix.write_text(prefix_text)
+            fails_closed(f"B4 {var} truncated to its longest parseable prefix ({path.name})", **{var: str(prefix)})
+    fails_closed("B4 CHAT_TEMPLATE_HOST missing", CHAT_TEMPLATE_HOST=str(h.tmp / "no-template.jinja"))
+    (h.tmp / "template-dir").mkdir(exist_ok=True)
+    (h.tmp / "template-dir" / "x").write_text("x")
+    fails_closed("B4 CHAT_TEMPLATE_HOST is a (non-empty) directory", CHAT_TEMPLATE_HOST=str(h.tmp / "template-dir"))
+    invalid_template = h.tmp / "invalid-template.jinja"
+    invalid_template.write_text("{% if broken %}\n")
+    fails_closed(
+        "B4 CHAT_TEMPLATE_HOST has invalid Jinja syntax",
+        CHAT_TEMPLATE_HOST=str(invalid_template),
+    )
+    layer_map = h.repo / "ablit" / "LAYER_MAP.json"
+    saved = layer_map.read_text()
+    layer_map.write_text("{ not json")
+    try:
+        fails_closed("B4 ablit/LAYER_MAP.json not JSON")
+    finally:
+        layer_map.write_text(saved)
+
+    control(h, "B5 control after the negative cases (the harness copy is intact)")
+
+
+# ------------------------------------------------------------------ part C --
+
+
+def overlay_order() -> list[str]:
+    m = re.search(r"^GLM53_OVERLAY_ORDER=\(\n(.*?)^\)\n", source(), re.S | re.M)
+    assert m, "GLM53_OVERLAY_ORDER=( ... ) not found in start.sh"
+    return [ln.strip().split()[0] for ln in m.group(1).splitlines() if ln.strip() and not ln.strip().startswith("#")]
+
+
+def apply_sequence(script: Path) -> list[str]:
+    return re.findall(r"^\s*python3 /opt/glm53/(patch_[a-z0-9_]+\.py)$", script.read_text(), re.M)
+
+
+def part_c(h: Harness) -> None:
+    print("Part C: overlay order pinned once, emitted to both ranks")
+    order = overlay_order()
+
+    r = h.run("write_inner_scripts", entry="start.fn.sh")
+    head = h.repo / ".glm53-exl3-head.inner.sh"
+    worker = h.repo / ".glm53-exl3-worker.inner.sh"
+    check(
+        r.returncode == 0 and head.is_file() and worker.is_file(),
+        f"C3 write_inner_scripts produced both inner scripts (rc={r.returncode} {r.stderr.strip()[:80]!r})",
+    )
+    if head.is_file() and worker.is_file():
+        hs, ws = apply_sequence(head), apply_sequence(worker)
+        check(hs == order, f"C3 head applies exactly GLM53_OVERLAY_ORDER ({len(hs)} entries)")
+        check(ws == order, f"C3 worker applies exactly GLM53_OVERLAY_ORDER ({len(ws)} entries)")
+        check(hs == ws, "C3 head and worker apply sequences are identical")
+        for s in (head, worker):
+            body = s.read_text()
+            check(
+                body.index("/opt/glm53/patch_hybrid_prefix_hit.py")
+                < body.index("/opt/glm53/patch_apc_per_group_retention.py"),
+                f"C3 {s.name}: hybrid -> per-group in the generated script",
+            )
+            if wires_ns():
+                check(
+                    body.index("/opt/glm53/patch_apc_per_group_retention.py")
+                    < body.index("/opt/glm53/patch_apc_no_store.py")
+                    < body.index("/opt/glm53/patch_xgrammar_termination.py"),
+                    f"C3 {s.name}: per-group -> no-store -> xgrammar in the generated script",
+                )
+            check(
+                "python3 /opt/glm53/patch_ablit.py" in body
+                and body.index("patch_kpool_tail_slotmap.py") < body.index("python3 /opt/glm53/patch_ablit.py"),
+                f"C3 {s.name}: ablit still applies last",
+            )
+            if KVCAP in order:
+                check(
+                    body.index(f"/opt/glm53/{DRAFTER}") < body.index("/opt/glm53/patch_apc_per_group_retention.py")
+                    < body.index(f"/opt/glm53/{KVCAP}") < body.index("/opt/glm53/patch_xgrammar_termination.py"),
+                    f"C3 {s.name}: drafter-group -> per-group -> kv-capacity-log -> xgrammar in the generated script",
+                )
+
+
+# ------------------------------------------------------------------ part D --
+
+
+class Rank:
+    def __init__(self, argv: list[str]) -> None:
+        self.env: dict[str, str] = {}
+        self.mounts: dict[str, str] = {}  # container path -> source path
+        i = 0
+        while i < len(argv):
+            tok = argv[i]
+            if tok == "-e" and i + 1 < len(argv):
+                k, _, v = argv[i + 1].partition("=")
+                self.env[k] = v
+                i += 2
+                continue
+            if tok == "-v" and i + 1 < len(argv):
+                parts = argv[i + 1].split(":")
+                if len(parts) >= 2 and parts[1].startswith("/opt/glm53/") and parts[1].endswith(".py"):
+                    self.mounts[parts[1]] = parts[0]
+                i += 2
+                continue
+            i += 1
+
+
+def parity_issues(head: Rank, worker: Rank, scp: dict[str, str], required: dict[str, str]) -> list[str]:
+    """Everything that would make the two ranks differ. `scp` maps the
+    worker-side /tmp file to the host file it was copied from; `required`
+    maps container env names the launcher wires to the value expected."""
+    issues = []
+    for name in CONTAINER_NAMES:
+        if head.env.get(name) != worker.env.get(name):
+            issues.append(f"env {name}: head={head.env.get(name)!r} worker={worker.env.get(name)!r}")
+    for name, value in required.items():
+        if head.env.get(name) != value or worker.env.get(name) != value:
+            issues.append(f"env {name} expected {value!r} on both ranks: head={head.env.get(name)!r} worker={worker.env.get(name)!r}")
+    if set(head.mounts) != set(worker.mounts):
+        issues.append(f"mount set differs: head-only={sorted(set(head.mounts) - set(worker.mounts))} worker-only={sorted(set(worker.mounts) - set(head.mounts))}")
+    for dest, head_src in head.mounts.items():
+        worker_tmp = worker.mounts.get(dest)
+        worker_src = scp.get(worker_tmp or "")
+        if worker_src != head_src:
+            issues.append(f"{dest}: head mounts {head_src}, worker mounts {worker_tmp} which scp fed from {worker_src}")
+    return issues
+
+
+def rank_runs(h: Harness, **env: str) -> tuple[Rank, Rank, dict[str, str]] | None:
+    r = h.run("launch_cluster", entry="start.fn.sh", MODEL_DIR="/root/.cache/huggingface/x", **env)
+    if r.returncode != 0:
+        print(f"    launch_cluster rc={r.returncode}: {r.stderr.strip()[-300:]}")
+        return None
+    head = worker = None
+    scp: dict[str, str] = {}
+    for c in h.calls():
+        if c[:2] == ["docker", "run"]:
+            head = Rank(c[2:])
+        elif c[0] == "ssh" and c[-1].lstrip().startswith("docker run"):
+            worker = Rank(shlex.split(c[-1])[2:])
+        elif c[0] == "scp" and len(c) >= 3 and ":" in c[-1]:
+            scp[c[-1].split(":", 1)[1]] = c[-2]
+    if head is None or worker is None:
+        print(f"    could not find both docker run lines (head={head is not None} worker={worker is not None})")
+        return None
+    return head, worker, scp
+
+
+def part_d(h: Harness) -> None:
+    print("Part D: both ranks mount the same host artifacts and get identical effective values")
+    shipped = shipped_apc_vars()
+    order = overlay_order()
+
+    scenarios: list[tuple[str, dict[str, str]]] = [("defaults", {})]
+    if wires_swa():
+        scenarios += [("SWA=14336", {SWA: "14336"}), ("SWA=0", {SWA: "0"}), ("SWA unset", {})]
+    if wires_ns():
+        scenarios += [("NO_STORE=0", {NS: "0"}), ("NO_STORE=1", {NS: "1"})]
+    if wires_swa() and wires_ns():
+        scenarios.append(("SWA=14336 + NO_STORE=0", {SWA: "14336", NS: "0"}))
+    # Exercise both ranks even if cache-reset forwarding regresses entirely.
+    scenarios.append((f"{CR}=1", {CR: "1"}))
+    if wires_kv():
+        scenarios += [("KVCAP=0", {KV: "0"}), ("KVCAP=1", {KV: "1"})]
+    # Unconditional: this checkout ships the thin-decode wiring, so a dropped
+    # or one-rank-missing forward must fail D2 rather than skip the scenario.
+    scenarios += [("FAST=0", {THIN: "0"}), ("FAST=1", {THIN: "1"})]
+    scenarios += [("LARGEM=0", {LARGE_M: "0"}),
+                  ("LARGEM=1", {LARGE_M: "1"})]
+    scenarios += [("H3 retention", {
+        "GLM53_DENSE_EXL3": "1", "GLM53_DENSE_FP8": "off",
+        PREFILL_BF16: "kda_in,shared_down,mla_qkv_a,shared_gate_up,kda_o,mla_q_b",
+    })]
+
+    # UMA cold-load knobs (optional; docs/cold-load-uma.md): both ranks when
+    # set, neither rank when unset — an exported empty would engage the
+    # GLM53_COLD_LOAD_UMA kill switch and crash InstantTensor's env readers.
+    COLDLOAD = {
+        "GLM53_COLD_LOAD_UMA": "0",
+        "GLM53_COLD_LOAD_STAGE_MMAP": "0",
+        "INSTANTTENSOR_MAX_FREE_MEM_USAGE": "1.5",
+        "INSTANTTENSOR_BUFFER_SIZE": "2147483648",
+        "INSTANTTENSOR_CHUNK_SIZE": "8388608",
+        "INSTANTTENSOR_CONCURRENCY": "4",
+        "INSTANTTENSOR_IO_DEPTH": "256",
+        "INSTANTTENSOR_BACKEND": "aio",
+    }
+    scenarios.append(("cold-load knobs", dict(COLDLOAD)))
+
+    first = None
+    for label, env in scenarios:
+        got = rank_runs(h, **env)
+        check(got is not None, f"D1 [{label}] launch_cluster dry-run captured both docker run lines")
+        if got is None:
+            continue
+        head, worker, scp = got
+        first = first or got
+        required: dict[str, str] = {}
+        if wires_swa() and env.get(SWA, ""):
+            required["VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA"] = env[SWA]
+        if NS in env:
+            required[NS] = env[NS]
+        required[CR] = env.get(CR, "0")
+        if KV in env:
+            required[KV] = env[KV]
+        if THIN in env:
+            required[THIN] = env[THIN]
+        for name, value in COLDLOAD.items():
+            if name in env:
+                required[name] = value
+        if LARGE_M in env:
+            required[LARGE_M] = env[LARGE_M]
+        required[PREFILL_BF16] = env.get(PREFILL_BF16, "off")
+        required["GLM53_DENSE_EXL3"] = env.get("GLM53_DENSE_EXL3", "0")
+        issues = parity_issues(head, worker, scp, required)
+        check(not issues, f"D2 [{label}] rank parity: " + ("; ".join(issues) if issues else "no differences"))
+        for name in CONTAINER_NAMES:
+            hv, wv = head.env.get(name), worker.env.get(name)
+            print(f"         {name}: head={hv!r} worker={wv!r}" + ("  (not wired by this launcher)" if hv is None and wv is None else ""))
+        if wires_swa() and not env.get(SWA, ""):
+            check(
+                "VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA" not in head.env and "VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA" not in worker.env,
+                f"D2 [{label}] empty SWA override is forwarded to neither rank",
+            )
+        for name in COLDLOAD:
+            if name not in env:
+                check(
+                    name not in head.env and name not in worker.env,
+                    f"D2 [{label}] unset {name} reaches neither rank",
+                )
+        mounted = {Path(p).name for p in head.mounts}
+        # Expected source -> destination map for EVERY *_PATCH_HOST: the head
+        # mount, the scp source and the worker mount must all be that file.
+        wrong_map = []
+        for var, base in host_vars().items():
+            dest = f"/opt/glm53/{base}"
+            src = head.mounts.get(dest, "")
+            if Path(src).resolve() != (h.repo / "overlay" / base).resolve() or dest not in worker.mounts:
+                wrong_map.append(f"{var}: {dest} <- {src or 'unmounted'}")
+        check(not wrong_map, f"D3 [{label}] every *_PATCH_HOST maps to its own /opt/glm53 destination on both ranks (wrong={wrong_map})")
+        for var, base in shipped.items():
+            src = head.mounts.get(f"/opt/glm53/{base}", "")
+            check(
+                base in mounted and Path(src).resolve() == (h.repo / "overlay" / base).resolve(),
+                f"D3 [{label}] {base} ({var}) mounted on both ranks from the checkout's overlay/ copy ({src})",
+            )
+        unlisted = sorted(m for m in mounted if m.startswith("patch_") and m not in order)
+        check(not unlisted, f"D3 [{label}] every mounted patch_*.py is in GLM53_OVERLAY_ORDER (unlisted={unlisted})")
+
+    # Negative self-check: the comparison must notice a one-rank difference.
+    if first is not None:
+        head, worker, scp = first
+        tampered = Rank([])
+        tampered.env = dict(worker.env)
+        tampered.mounts = dict(worker.mounts)
+        tampered.env["VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA"] = (
+            "0" if tampered.env.get("VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA") != "0" else "1"
+        )
+        dest = next(iter(sorted(tampered.mounts)))
+        del tampered.mounts[dest]
+        issues = parity_issues(head, tampered, scp, {})
+        check(
+            any("env VLLM_PREFIX_CACHE_RETENTION_INTERVAL_SWA" in i for i in issues)
+            and any("mount set differs" in i for i in issues),
+            f"D4 synthetic one-rank mismatch is reported ({len(issues)} issues: {issues[:2]})",
+        )
+        bad_scp = dict(scp)
+        wdest = sorted(worker.mounts)[0]
+        bad_scp[worker.mounts[wdest]] = "/somewhere/else.py"
+        issues = parity_issues(head, worker, bad_scp, {})
+        check(any(wdest in i for i in issues), f"D4 a worker scp fed from a different host file is reported ({issues[:1]})")
+
+
+def allocator_overrides(h: Harness) -> None:
+    for value in (None, "", "expandable_segments:False, max_split_size_mb:128"):
+        env = {} if value is None else {"PYTORCH_CUDA_ALLOC_CONF": value}
+        ranks = rank_runs(h, **env)
+        check(ranks is not None, f"allocator {value!r}: captured both launches")
+        if ranks is None:
+            continue
+        expected = "expandable_segments:True" if value is None else value
+        check(
+            all(rank.env.get("PYTORCH_CUDA_ALLOC_CONF") == expected for rank in ranks[:2]),
+            f"allocator {value!r}: both ranks receive the complete assignment",
+        )
+
+# ------------------------------------------------------------------ part E --
+
+
+def part_e(h: Harness) -> None:
+    print("Part E: host Python/Jinja selection, with real template parsing")
+    # Available candidates use the test runner's Jinja2. Missing-Jinja candidates
+    # run that same Python with -S, so AST/JSON validation still executes normally.
+    from jinja2 import Environment
+
+    Environment(extensions=["jinja2.ext.loopcontrols"])
+    interpreter_log = h.tmp / "interpreters.log"
+
+    def interpreter(name: str, jinja: bool) -> Path:
+        path = h.bin / name
+        path.write_text(
+            "#!/bin/bash\n"
+            f"printf '%s\\037%s\\n' {shlex.quote(name)} \"$*\" >> {shlex.quote(str(interpreter_log))}\n"
+            f"exec {shlex.quote(sys.executable)} {' ' if jinja else '-S '}\"$@\"\n"
+        )
+        path.chmod(0o755)
+        return path
+
+    def run(**extra: str) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+        h.log.unlink(missing_ok=True)
+        interpreter_log.unlink(missing_ok=True)
+        # Intercept only the absolute system candidate in this shell. Never use
+        # the host's actual /usr/bin/python3 or its incidental installed packages.
+        script = (
+            'function /usr/bin/python3() { "$GLM53_TEST_SYSTEM_PYTHON" "$@"; }\n'
+            'source ./start.sh restart\n'
+        )
+        r = subprocess.run(
+            ["bash", "-c", script],
+            cwd=h.repo,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=h.env(GLM53_TEST_SYSTEM_PYTHON=str(h.bin / "system-python"), **extra),
+        )
+        calls = interpreter_log.read_text().splitlines() if interpreter_log.exists() else []
+        # Record real Jinja import/parse executions, not unrelated AST/JSON work.
+        selected = [line.split(SEP, 1)[0] for line in calls if "jinja2" in line]
+        return r, selected
+
+    def reaches_stop(label: str, expected: list[str], **extra: str) -> None:
+        r, selected = run(**extra)
+        head_removed, worker_removed = removal_facts(h.host_touching_calls())
+        check(
+            head_removed and worker_removed and selected == expected,
+            f"E {label}: validators={selected}, head removed={head_removed}, "
+            f"worker removed over ssh={worker_removed}, rc={r.returncode}, "
+            f"stderr={r.stderr[-200:]!r}",
+        )
+
+    def fails_closed(label: str, expected: list[str], **extra: str) -> None:
+        r, selected = run(**extra)
+        check(
+            r.returncode == 2 and not h.calls() and selected == expected,
+            f"E {label}: validators={selected}, rc={r.returncode}, stderr={r.stderr[-200:]!r}",
+        )
+
+    for name in ("python3", "python3.12", "python3.11", "system-python"):
+        interpreter(name, True)
+    reaches_stop("caller PATH wins", ["python3", "python3"])
+    interpreter("python3", False)
+    reaches_stop("alternate interpreter", ["python3", "python3.12", "python3.12"])
+    interpreter("python3.12", False)
+    reaches_stop("second alternate", ["python3", "python3.12", "python3.11", "python3.11"])
+    interpreter("python3.11", False)
+    reaches_stop("system fallback", ["python3", "python3.12", "python3.11", "system-python", "system-python"])
+    interpreter("system-python", False)
+    fails_closed("all candidates lack Jinja", ["python3", "python3.12", "python3.11", "system-python"])
+
+    # Healthy alternatives must not rescue an invalid explicit override.
+    for name in ("python3", "python3.12", "python3.11", "system-python"):
+        interpreter(name, True)
+    pinned = interpreter("pinned python", True)
+    reaches_stop("explicit path with spaces", ["pinned python", "pinned python"], GLM53_VALIDATE_PYTHON=str(pinned))
+    reaches_stop("explicit PATH name", ["python3.11", "python3.11"], GLM53_VALIDATE_PYTHON="python3.11")
+    no_jinja = interpreter("no-jinja", False)
+    fails_closed("override lacks Jinja", ["no-jinja"], GLM53_VALIDATE_PYTHON=str(no_jinja))
+    not_executable = interpreter("not-executable", True)
+    not_executable.chmod(0o644)
+    for label, value in (
+        ("empty override", ""),
+        ("missing override", str(h.tmp / "missing-python")),
+        ("non-executable override", str(not_executable)),
+        ("override is not a command line", f"{pinned} -S"),
+    ):
+        fails_closed(label, [], GLM53_VALIDATE_PYTHON=value)
+
+    invalid = h.tmp / "invalid-template.jinja"
+    invalid.write_text("{% if broken %}\n")
+    fails_closed("invalid template does not try alternatives", ["python3", "python3"], CHAT_TEMPLATE_HOST=str(invalid))
+    fails_closed(
+        "invalid template with explicit interpreter",
+        ["pinned python", "pinned python"],
+        GLM53_VALIDATE_PYTHON=str(pinned),
+        CHAT_TEMPLATE_HOST=str(invalid),
+    )
+    interpreter("python3", False)
+    fails_closed(
+        "invalid template after discovery",
+        ["python3", "python3.12", "python3.12"],
+        CHAT_TEMPLATE_HOST=str(invalid),
+    )
+    loop_template = h.tmp / "loop-template.jinja"
+    loop_template.write_text("{% for item in [1] %}{% break %}{% endfor %}\n")
+    reaches_stop(
+        "loop controls remain enabled",
+        ["python3", "python3.12", "python3.12"],
+        CHAT_TEMPLATE_HOST=str(loop_template),
+    )
+
+def loader_all_rank_wiring() -> None:
+    """Exercise real launch functions against the existing recording PATH."""
+    weight_dest = "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/model_loader/weight_utils.py"
+    patch_dest = "/opt/glm53/patch_loadclone.py"
+    for launcher, count in (("start.sh", 2), ("start-tp3.sh", 3), ("start-tp4.sh", 4)):
+        with tempfile.TemporaryDirectory() as raw:
+            h = Harness(Path(raw), launcher=launcher)
+            fn = h.repo / "start.fn.sh"
+            fn.write_text(fn.read_text().rsplit('"$@"', 1)[0] + '''
+launch_loader() {
+    validate_numeric_config || return
+    launch_cluster
+}
+"$@"
+''')
+            result = h.run("launch_loader", entry="start.fn.sh",
+                           MODEL_DIR="/root/.cache/huggingface/x",
+                           LOAD_FORMAT="", GLM53_LOAD_CLONE="0", GLM53_LOAD_PREFETCH="0006")
+            assert result.returncode == 0, (launcher, result.stderr)
+            runs = []
+            copies = {}
+            for call in h.calls():
+                if call[:2] == ["docker", "run"]:
+                    runs.append((None, call[2:]))
+                elif call[0] == "ssh" and call[-1].lstrip().startswith("docker run"):
+                    runs.append((call[-2], shlex.split(call[-1])[2:]))
+                elif call[0] == "scp" and ":" in call[-1]:
+                    host, dest = call[-1].split(":", 1)
+                    copies[(host, dest)] = call[-2]
+            assert len(runs) == count, (launcher, runs)
+            for host, argv in runs:
+                rank = Rank(argv)
+                assert rank.env["GLM53_LOAD_CLONE"] == "0"
+                assert rank.env["GLM53_LOAD_PREFETCH"] == "6"
+                assert rank.env["LOAD_FORMAT"] == ""
+                if launcher == "start-tp3.sh":
+                    mounts = dict(argv[i + 1].split(":")[:2][::-1]
+                                  for i, arg in enumerate(argv[:-1]) if arg == "-v")
+                    expected_root = str(h.repo / "overlay/tp3")
+                    if host is None:
+                        assert mounts[weight_dest] == expected_root + "/vllm/model_executor/model_loader/weight_utils.py"
+                    else:
+                        assert mounts[weight_dest] == "/tmp/glm53-tp3/vllm/model_executor/model_loader/weight_utils.py"
+                        assert copies[(host, "/tmp/glm53-tp3")] == expected_root
+                else:
+                    expected_patch = str(h.repo / "overlay/patch_loadclone.py")
+                    if host is None:
+                        assert rank.mounts[patch_dest] == expected_patch
+                    else:
+                        assert copies[(host, rank.mounts[patch_dest])] == expected_patch
+
+
+def loader_artifacts_fail_before_restart_stop() -> None:
+    for launcher in ("start.sh", "start-tp3.sh", "start-tp4.sh"):
+        with tempfile.TemporaryDirectory() as raw:
+            h = Harness(Path(raw), launcher=launcher)
+            # Positive control: the loader gate itself accepts the shipped tree.
+            gate = "validate_overlay_artifacts" if launcher == "start.sh" else "validate_loadclone_artifacts"
+            result = h.run(gate, entry="start.fn.sh")
+            assert result.returncode == 0, (launcher, result.stderr)
+            assert not h.calls()
+            result = h.run("restart", LOADCLONE_PATCH_HOST=str(h.tmp / "missing.py"))
+            assert result.returncode == 2, (launcher, result.stderr)
+            assert not h.calls(), "the refused restart still invoked something"
+            if launcher == "start-tp3.sh":
+                target = h.repo / "overlay/tp3/vllm/model_executor/model_loader/weight_utils.py"
+                target.write_text(target.read_text().replace("def _glm53_load_options():", "def broken_options():"))
+                result = h.run("restart")
+                assert result.returncode == 2, result.stderr
+                assert not h.calls(), "the refused restart still invoked something"
+
+
+# ------------------------------------------------------------------- main --
+
+
+def main() -> int:
+    if not START.is_file():
+        raise SystemExit(f"missing {START}")
+    print(f"launcher: {START}")
+    print(f"ships: {', '.join(f'{v}={b}' for v, b in shipped_apc_vars().items())}; forwards SWA={wires_swa()} NO_STORE={wires_ns()} KVCAP={wires_kv()}")
+    part_a()
+    part_f()
+    part_g()
+    with tempfile.TemporaryDirectory() as raw:
+        h = Harness(Path(raw))
+        part_b(h)
+        part_c(h)
+        part_d(h)
+        allocator_overrides(h)
+    with tempfile.TemporaryDirectory() as raw:
+        part_e(Harness(Path(raw)))
+    loader_all_rank_wiring()
+    loader_artifacts_fail_before_restart_stop()
+    print()
+    if FAILURES:
+        print(f"FAILED ({len(FAILURES)}): " + "; ".join(FAILURES))
+        return 1
+    print("launcher rank-parity / order / pre-stop gate OK")
+    return 0
+
+
+def test_launcher_rank_parity() -> None:
+    """pytest entry point (the script form above is what the README documents)."""
+    FAILURES.clear()
+    assert main() == 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

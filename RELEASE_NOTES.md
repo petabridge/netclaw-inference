@@ -3,6 +3,24 @@
 Repository releases may contain one or more independently promoted inference
 images. Every release section lists the image ids affected by that release.
 
+## v0.2.0 (Unreleased)
+
+Images:
+
+- `vllm-glm-5-3-flash-exl3-gb10`
+
+Changes:
+
+- **Add GLM-5.3-Flash EXL3 for two DGX Sparks (TP=2)**
+  - Vendor the MiaAI-Lab GLM-5.3-Flash-EXL3-2x-DGX-Sparks recipe unmodified at
+    commit `674155de`, with a per-file hash lock of the upstream tree.
+  - Pin the base by literal digest, the ExLlamaV3 source archive and the
+    InstantTensor wheel by checksum, and bake the files upstream `start.sh`
+    bind-mounts at runtime plus its generated per-rank launch scripts, so the
+    image runs under a plain compose deployment.
+  - Record the AGPL-3.0 recipe license and the runtime weights' ShapleyMCG and
+    CC BY-NC-ND terms in the image folder.
+
 ## v0.1.0 (2026-08-14)
 
 **Initial Release**

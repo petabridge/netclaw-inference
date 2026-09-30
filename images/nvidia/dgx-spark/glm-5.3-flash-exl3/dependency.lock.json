@@ -1,0 +1,71 @@
+{
+  "schema_version": 2,
+  "base_image": {
+    "reference": "vllm/vllm-openai:glm53-flash-arm64-cu130",
+    "digest": "sha256:905c02933be6021301db2dc284e24e3727467aa3a0f63b41d609885778a07bce",
+    "platform": "linux/arm64",
+    "compressed_size_bytes": 9710629881,
+    "role": "Upstream vLLM GLM-5.3-Flash ARM64 CUDA 13.0 runtime; the base the upstream recipe pins"
+  },
+  "upstream_recipe": {
+    "repository": "https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks",
+    "commit": "674155dec2f2f62bb879801b5ce2cfc759a0bebf",
+    "commit_date": "2026-09-30T19:40:14+08:00",
+    "license": "AGPL-3.0 (contributions before 2026-09-07: MIT)",
+    "vendored_paths": ["Dockerfile", ".dockerignore", "overlay/", "files/", "tests/", "ablit/ (without transplant/)"],
+    "vendored_files": 162,
+    "lock": "upstream-recipe.sha256",
+    "lock_sha256": "657e011060dd7db6f1a4dce00e8269730c2260b5773fb28a41958dce0c37514e",
+    "lock_note": "Hashes of the vendored files exactly as published at the pinned commit. recipe/Dockerfile is the only vendored file Petabridge modifies; the change is recorded in petabridge-dockerfile.diff."
+  },
+  "petabridge_changes": {
+    "dockerfile_diff": "petabridge-dockerfile.diff",
+    "dockerfile_diff_sha256": "8369c373eae1b10c2ad4a20999e11c7501e6f96c9c0a46f95dae08e585ad988a",
+    "launch_scripts": {
+      "recipe/petabridge/glm53-head.sh": "b96541ef7469c95a0d9f84be0e2b3532e70bf434e1e6a809153fd5ddc6b62bf6",
+      "recipe/petabridge/glm53-worker.sh": "436bb0cc4ab353b58e909131dc13a033dc5b2e5ea06e322039d4fd33cfd41533"
+    },
+    "launch_scripts_origin": "Output of upstream start.sh write_inner_scripts() at the pinned commit, unmodified."
+  },
+  "source_dependencies": {
+    "exllamav3": {
+      "repository": "https://github.com/turboderp-org/exllamav3",
+      "commit": "c5d9c657966ffeeaa9353f0cc899f18629da4a13",
+      "version": "0.0.43",
+      "archive": "https://github.com/turboderp-org/exllamav3/archive/c5d9c657966ffeeaa9353f0cc899f18629da4a13.tar.gz",
+      "archive_sha256": "87cf1ed1abad0fd2eb84744418e6a2ea3ec09a874552c1a3e0f226eac03cb8f9",
+      "license": "MIT",
+      "build": "exllamav3_ext compiled for sm_121a with the upstream overlay kernels (fat GEMM, E3 grouped MoE, thin decode)"
+    }
+  },
+  "python_wheels": {
+    "instanttensor": {
+      "version": "0.2.0",
+      "filename": "instanttensor-0.2.0-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl",
+      "wheel_sha256": "eefde9b121cd3a2699bd079a19cba5c0a74f23cc1fa2dd8e186a12910f89408e",
+      "install": "--no-deps (upstream: keeps the base image's NCCL 2.30.7)"
+    }
+  },
+  "runtime_models": {
+    "note": "Weights are NOT in the image. Pre-stage these exact revisions into the host Hugging Face cache.",
+    "target": {
+      "repository": "Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw",
+      "revision": "25a44fdbf16862a46b7cc9921142c6c81350af2f",
+      "license": "ShapleyMCG License 1.0 (attribution required)"
+    },
+    "draft": {
+      "repository": "incoai/GLM-5.3-Flash-DFlash2",
+      "revision": "dc77ff1c99eeb2df044ee3d4f0094eb033fee410",
+      "license": "CC BY-NC-ND 4.0 (research and evaluation; commercial licensing via Inco AI)",
+      "optional": "SPEC_METHOD=mtp uses the target's built-in MTP head and needs no draft model"
+    },
+    "base_model": {
+      "repository": "zai-org/GLM-5.3-Flash",
+      "license": "MIT"
+    }
+  },
+  "provenance": {
+    "repository": "https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks",
+    "commit": "674155dec2f2f62bb879801b5ce2cfc759a0bebf"
+  }
+}
