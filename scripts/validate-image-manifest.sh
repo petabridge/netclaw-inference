@@ -145,6 +145,22 @@ case "$dockerfile_path" in
     ;;
 esac
 
+# Print Dockerfile FROM instructions, skipping heredoc bodies (RUN <<'PY' ...
+# PY) so embedded Python such as `from pathlib import Path` is not mistaken
+# for an instruction.
+dockerfile_from_lines() {
+  awk '
+    in_heredoc { if ($0 == terminator) { in_heredoc = 0 }; next }
+    toupper($1) == "FROM" { print }
+    match($0, /<<-?[\047"]?[A-Za-z_][A-Za-z0-9_]*[\047"]?/) {
+      terminator = substr($0, RSTART, RLENGTH)
+      sub(/^<<-?/, "", terminator)
+      gsub(/[\047"]/, "", terminator)
+      in_heredoc = 1
+    }
+  ' "$1"
+}
+
 declare -A stage_aliases=()
 while IFS= read -r from_line; do
   read -r -a tokens <<< "$from_line"
@@ -169,9 +185,9 @@ while IFS= read -r from_line; do
   if [[ "${tokens[$alias_index]:-}" =~ ^([Aa][Ss])$ && -n "${tokens[$((alias_index + 1))]:-}" ]]; then
     stage_aliases["${tokens[$((alias_index + 1))]}"]=1
   fi
-done < <(awk 'toupper($1) == "FROM" { print }' "$dockerfile_path")
+done < <(dockerfile_from_lines "$dockerfile_path")
 
-if [[ ${#stage_aliases[@]} -eq 0 ]] && ! awk 'toupper($1) == "FROM" { found=1 } END { exit !found }' "$dockerfile_path"; then
+if [[ ${#stage_aliases[@]} -eq 0 ]] && [[ -z "$(dockerfile_from_lines "$dockerfile_path")" ]]; then
   echo "Dockerfile has no FROM instruction: $dockerfile" >&2
   exit 1
 fi

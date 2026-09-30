@@ -20,6 +20,7 @@ runtimes wherever their documented hardware and model requirements fit.
 | Image | Platform | Intended hardware | Status |
 | --- | --- | --- | --- |
 | [`vllm-deepseek-v4-flash-0731-dspark-gb10`](images/nvidia/dgx-spark/deepseek-v4-flash-0731/README.md) | `linux/arm64` | Two NVIDIA DGX Sparks, TP=2 | Source-build candidate; hardware qualification pending |
+| [`vllm-glm-5-3-flash-exl3-gb10`](images/nvidia/dgx-spark/glm-5.3-flash-exl3/README.md) | `linux/arm64` | Two NVIDIA DGX Sparks, TP=2 | Vendored MiaAI-Lab recipe; hardware qualification pending (AGPL-3.0 folder, see its README) |
 | [`llama-cpp-rocm-gfx1201-avx2`](images/amd/rocm/llama-cpp-gfx1201-avx2/README.md) | `linux/amd64` | AMD RDNA4 (`gfx1201`) hosts, AVX2 CPU baseline | Source-build candidate; hardware qualification pending |
 
 The DGX Spark image targets `deepseek-ai/DeepSeek-V4-Flash-0731`. Model weights

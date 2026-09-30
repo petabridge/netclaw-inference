@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../schemas/image.schema.json",
+  "schema_version": 1,
+  "id": "vllm-glm-5-3-flash-exl3-gb10",
+  "description": "GLM-5.3-Flash EXL3 vLLM runtime (MiaAI-Lab recipe) for two NVIDIA DGX Sparks",
+  "vendor": "nvidia",
+  "hardware_family": "dgx-spark",
+  "platform": "linux/arm64",
+  "registry_repository": "petabridge/vllm-glm-5-3-flash-exl3-gb10",
+  "build_enabled": true,
+  "context": "images/nvidia/dgx-spark/glm-5.3-flash-exl3/recipe",
+  "dockerfile": "images/nvidia/dgx-spark/glm-5.3-flash-exl3/recipe/Dockerfile"
+}
