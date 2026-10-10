@@ -24,7 +24,7 @@ fails the image if any AVX-512 (`zmm`) opcode remains in the CPU backend.
 | Input | Pin |
 | --- | --- |
 | Base image | `rocm/dev-ubuntu-24.04:7.2.3` (digest-pinned; matches the proven-good production ROCm 7.2.3) |
-| llama.cpp | commit `9b05354ec6fb58b4e665e9a39ebc40285c015638` (build `b10433`), GitHub archive verified by SHA-256 |
+| llama.cpp | commit `d81235049384534c167caea52b85a694f6103d14` (build `b11429`, v0.6.0), GitHub archive verified by SHA-256 |
 | GPU target | `gfx1201` (RDNA4) |
 | CPU baseline | `x86-64-v3` — AVX, AVX2, FMA, F16C; AVX-512 off |
 | Binaries | `llama-server`, `llama-cli` under `/opt/llama.cpp` |

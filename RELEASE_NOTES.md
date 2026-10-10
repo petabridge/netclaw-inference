@@ -8,9 +8,19 @@ images. Every release section lists the image ids affected by that release.
 Images:
 
 - `vllm-glm-5-3-flash-exl3-gb10`
+- `llama-cpp-rocm-gfx1201-avx2`
 
 Changes:
 
+- **Bump llama.cpp to v0.6.0 for the AMD ROCm gfx1201 AVX2 image**
+  - Move the upstream llama.cpp source pin from commit `9b05354` (build
+    `b10433`) to `d812350` (build `b11429`), the tagged `v0.6.0` release.
+  - Update the GitHub archive URL and SHA-256 checksum in the Dockerfile and
+    the dependency lock; the build stays on the digest-pinned ROCm 7.2.3 base
+    with the AVX2 (`x86-64-v3`) CPU baseline and AVX-512 disabled.
+  - Adds the `llama_batch_ext` API and DFlash speculative decoding support
+    (including `--spec-type draft-dflash`), on the same proven gfx1201
+    backend as before.
 - **Add GLM-5.3-Flash EXL3 for two DGX Sparks (TP=2)**
   - Vendor the MiaAI-Lab GLM-5.3-Flash-EXL3-2x-DGX-Sparks recipe unmodified at
     commit `674155de`, with a per-file hash lock of the upstream tree.

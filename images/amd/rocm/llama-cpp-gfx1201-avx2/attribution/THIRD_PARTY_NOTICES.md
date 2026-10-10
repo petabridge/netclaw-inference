@@ -6,7 +6,7 @@ its own license.
 ## llama.cpp
 
 - Project: https://github.com/ggml-org/llama.cpp
-- Pinned commit: `9b05354ec6fb58b4e665e9a39ebc40285c015638` (build `b10433`)
+- Pinned commit: `d81235049384534c167caea52b85a694f6103d14` (build `b11429`, v0.6.0)
 - License: MIT
 - The upstream MIT license text is retained in the image at
   `/opt/llama.cpp/share/doc/llama.cpp/LICENSE`, copied from the pinned source
