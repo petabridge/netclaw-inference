@@ -109,9 +109,22 @@ RUN set -euxo pipefail; \
     fi; \
     echo "Verified AVX2 baseline: no AVX-512 (zmm) opcodes in $target"
 
-# Standalone smoke check, then drop the source/build tree.
+# Parse the serving arguments before emitting an image. --help exits after
+# argument parsing, without loading weights or requiring GPU hardware. A bare
+# --help check missed the removal of --no-mmap in v0.6.0; keep this command in
+# sync with the documented serving contract when updating the source pin.
+# This checks CLI compatibility, not model loading or speculative acceptance.
 RUN set -euxo pipefail; \
-    /opt/llama.cpp/bin/llama-server --help >/dev/null; \
+    /opt/llama.cpp/bin/llama-server \
+        -m /models/model.gguf \
+        --mmproj /models/mmproj.gguf \
+        --host 0.0.0.0 --port 8080 \
+        -ngl 999 -fa 1 --load-mode none --jinja \
+        --temp 0.7 --top-p 0.8 --top-k 20 --min-p 0 \
+        --presence-penalty 1.5 --reasoning off \
+        --ctx-size 262144 --cache-type-k q8_0 --cache-type-v q8_0 \
+        --spec-type draft-mtp --spec-draft-n-max 3 -np 2 \
+        --help >/dev/null; \
     cd /; \
     rm -rf /opt/petabridge/llama.cpp
 

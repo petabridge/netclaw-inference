@@ -55,6 +55,32 @@ Deployments should reference the published manifest digest rather than a tag:
 ghcr.io/petabridge/llama-cpp-rocm-gfx1201-avx2@sha256:<digest>
 ```
 
+### Migrating to llama.cpp v0.6.0
+
+The CLI is part of the deployment contract. v0.6.0 removed `--no-mmap`;
+replace it with `--load-mode none` to preserve loading without memory mapping.
+Leaving the old flag in a deployment makes `llama-server` exit before loading
+the model. `--load-mode auto` is the default and may enable memory mapping.
+
+The image build parses a representative multimodal serving command with
+`--load-mode none`, q8_0 KV, two slots, reasoning disabled, and
+`--spec-type draft-mtp --spec-draft-n-max 3`. It appends `--help`, so this
+check needs neither model weights nor GPU hardware and fails on unsupported
+arguments. It does not establish model compatibility, GPU health, or draft
+acceptance; those still require hardware qualification before promotion.
+
+`draft-dflash` is a separate speculative decoding implementation, not a
+replacement name for `draft-mtp`. It needs a compatible DFlash draft GGUF,
+supplied with `--model-draft`, containing the target-layer metadata expected
+by that implementation. An embedded MTP head alone does not qualify a model
+for DFlash. Keep `draft-mtp` when upgrading an existing embedded-MTP deployment;
+qualify DFlash with its draft model in a separate deployment change.
+
+For either mode, qualification must verify stable container state, readiness,
+non-empty chat completions, memory usage under representative load, and actual
+draft acceptance in the server logs. A successful image build or container
+start alone is insufficient.
+
 ## License
 
 Repository-authored material is MIT. llama.cpp is MIT and its license is

@@ -66,5 +66,19 @@
     "repository_material": "MIT",
     "llama_cpp": "MIT",
     "retained_in_image": "/opt/llama.cpp/share/doc/llama.cpp/LICENSE"
+  },
+  "runtime_contract": {
+    "model_loading": {
+      "without_mmap": "--load-mode none",
+      "removed_flags": [
+        "--no-mmap"
+      ]
+    },
+    "speculative_decoding": {
+      "embedded_mtp": "--spec-type draft-mtp --spec-draft-n-max 3",
+      "dflash": "Requires a compatible DFlash draft GGUF supplied with --model-draft; an embedded MTP head alone is insufficient."
+    },
+    "build_smoke_check": "Parse representative multimodal MTP serving arguments with --help; no model weights or GPU hardware required.",
+    "hardware_qualification": "Verify readiness, non-empty chat completions, memory stability under representative load, and draft acceptance before promotion."
   }
 }
