@@ -1,0 +1,100 @@
+{
+  "schema_version": 2,
+  "base_image": {
+    "reference": "nvcr.io/nvidia/pytorch:26.07-py3",
+    "digest": "sha256:7531d90bcbe0e43e1f7363029c7e145ce90eebeb494a7b4695fdba0329d7c3c3",
+    "platform": "linux/arm64",
+    "role": "NVIDIA PyTorch container; the base the upstream recipe pins (recipe/scripts/config.sh BASE_IMAGE)",
+    "digest_note": "The linux/arm64 manifest of nvcr.io/nvidia/pytorch:26.07-py3, resolved anonymously via nvcr.io's token + manifest endpoints (no NGC login required). The same digest is pinned in recipe/Dockerfile's FROM line."
+  },
+  "upstream_recipe": {
+    "repository": "https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold",
+    "commit": "05397e24ee1fa0a60df11ff5dcb7a68f45cff6cd",
+    "commit_date": "2026-10-10T01:46:17+03:00",
+    "license": "Apache-2.0",
+    "license_note": "The upstream recipe's own code, scripts and documentation are Apache-2.0 (upstream LICENSE, NOTICE, README and CREDITS.md all say so). This is NOT the AGPL-3.0-with-MIT-before-2026-09-07 license of the sibling MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks vLLM recipe; that license must not be applied here. The only MIT material in this recipe is TensorFold's notice for code written before v0.6.0, kept in attribution/LICENSE.MIT.",
+    "vendored_paths": [
+      ".github/",
+      "docs/",
+      "patches/",
+      "scripts/",
+      "tests/",
+      "tools/",
+      "CHANGELOG.md",
+      "CREDITS.md",
+      "LICENSE",
+      "NOTICE",
+      "README.md",
+      "start-tp3.sh",
+      "start.sh",
+      "stop.sh"
+    ],
+    "vendored_files": 145,
+    "patches": 97,
+    "lock": "upstream-recipe.sha256",
+    "lock_sha256": "7bf00122fe0af03c1333fdfdd498791765616868ca71d48328caad4e8034e508",
+    "lock_note": "Hashes of the vendored files exactly as published at the pinned commit; recipe/ is byte-identical to that commit's working tree (verified with diff -r, .git excluded). The upstream ships no Dockerfile: it builds its image from a shell heredoc inside recipe/scripts/prepare.sh (lines 177-189). This image folder materializes that heredoc as ./Dockerfile, the only file Petabridge writes."
+  },
+  "petabridge_changes": {
+    "dockerfile_diff": "petabridge-dockerfile.diff",
+    "dockerfile_diff_sha256": "3294832e29f216140bb54705b23dc862874333152835b5288f017ae8a2bbfc17",
+    "dockerfile_origin": "Materialized from recipe/scripts/prepare.sh lines 177-189 (the `docker build ... -f - patches <<'DOCKERFILE'` heredoc) at the pinned commit. Deviations are marked PETABRIDGE: in ./Dockerfile and are itemized in ./README.md (build boundary).",
+    "patch_set_label": {
+      "label": "tf.patches",
+      "value": "0718b016e3c6",
+      "origin": "recipe/scripts/config.sh image_hash(): sha256 over patches/*.patch plus IMAGE_EXTRAS, first 12 hex characters. Upstream passes it as a build argument; this image records it literally and asserts it at build time. It is the key the recipe's start.sh uses for its compiled-kernel cache."
+    }
+  },
+  "source_dependencies": {
+    "tensorfold": {
+      "repository": "https://github.com/ashhart/TensorFold",
+      "tag": "v0.6.0",
+      "tag_object": "c812f8b65b34e4d0290b6326e9d5416688ed56ab",
+      "commit": "c4646171139ee8a3c38103eaa1699dad226ec12b",
+      "install": "pip install --no-cache-dir --upgrade git+https://github.com/ashhart/TensorFold.git@c4646171139ee8a3c38103eaa1699dad226ec12b",
+      "license": "Apache-2.0 from v0.6.0; code written before v0.6.0 keeps its MIT notice (attribution/LICENSE.MIT)",
+      "pin_note": "Upstream installs the mutable tag v0.6.0 (recipe/scripts/config.sh TF_VERSION=v0.6.0). This repository pins source dependencies by immutable commit; c4646171139ee8a3c38103eaa1699dad226ec12b is the commit that annotated tag points at (git ls-remote, 2026-10-10)."
+    }
+  },
+  "python_packages": {
+    "extras": "av==18.1.0 xgrammar>=0.2.8,<0.3",
+    "note": "The upstream recipe's IMAGE_EXTRAS, kept as-is. These are version-pinned, not hash-pinned: an aarch64 wheel hash for av 18.1.0 and a single version inside the xgrammar range were not resolved here. Pin them by URL and checksum before enabling the build if the supply-chain bar for this image is to match the DeepSeek V4 image's.",
+    "av": {
+      "version": "18.1.0",
+      "license": "BSD-3-Clause (PyAV); LGPL FFmpeg libraries"
+    },
+    "xgrammar": {
+      "requirement": ">=0.2.8,<0.3",
+      "license": "Apache-2.0"
+    }
+  },
+  "runtime_models": {
+    "note": "Weights are NOT in the image. Pre-stage the pinned revisions into the host Hugging Face cache; the ranks mount it at /root/.cache/huggingface and run with HF_HUB_OFFLINE=1.",
+    "target": {
+      "repository": "Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold",
+      "revision": "078455ffe6472f9a52fbc1139f58b9db2881b25c",
+      "license": "Apache-2.0",
+      "note": "EXL3 routed experts at 4 bits a weight, BF16 elsewhere, ~176 GB. The recipe's default checkpoint since v1.3.3."
+    },
+    "draft": {
+      "repository": "incoai/GLM-5.3-Flash-DFlash2",
+      "revision": "bf582e4eacc1810f76656d1811693ff6c6737d2a",
+      "license": "CC BY-NC-ND 4.0 (research and evaluation; commercial licensing via Inco AI)",
+      "optional": "DRAFTER=mtp uses the target checkpoint's own MTP head and downloads no draft model; that mode serves one request at a time"
+    },
+    "base_model": {
+      "repository": "zai-org/GLM-5.3-Flash",
+      "license": "MIT, Copyright (c) 2026 Z.AI Co., Ltd. The target checkpoint derives from it."
+    },
+    "alternate": {
+      "repository": "Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw",
+      "revision": "not pinned by the recipe; revision empty in recipe/scripts/config.sh, so the Hub's main is used",
+      "license": "ShapleyMCG License 1.0 (attribution required)",
+      "note": "Not the default. A byte-identical mirror of brandonmusic/GLM-5.3-Flash-tr3-4bpw, selectable with MODEL_ID. The required attribution notice is in attribution/SHAPLEYMCG-NOTICE.md."
+    }
+  },
+  "provenance": {
+    "repository": "https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold",
+    "commit": "05397e24ee1fa0a60df11ff5dcb7a68f45cff6cd"
+  }
+}

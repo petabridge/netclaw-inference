@@ -7,7 +7,7 @@ images. Every release section lists the image ids affected by that release.
 
 Images:
 
-- `vllm-glm-5-3-flash-exl3-gb10`
+- `tensorfold-glm-5-3-flash-gb10`
 - `llama-cpp-rocm-gfx1201-avx2`
 
 Changes:
@@ -34,15 +34,22 @@ Changes:
   - Adds the `llama_batch_ext` API and DFlash speculative decoding support
     (including `--spec-type draft-dflash`), on the same proven gfx1201
     backend as before.
-- **Add GLM-5.3-Flash EXL3 for two DGX Sparks (TP=2)**
-  - Vendor the MiaAI-Lab GLM-5.3-Flash-EXL3-2x-DGX-Sparks recipe unmodified at
-    commit `674155de`, with a per-file hash lock of the upstream tree.
-  - Pin the base by literal digest, the ExLlamaV3 source archive and the
-    InstantTensor wheel by checksum, and bake the files upstream `start.sh`
-    bind-mounts at runtime plus its generated per-rank launch scripts, so the
-    image runs under a plain compose deployment.
-  - Record the AGPL-3.0 recipe license and the runtime weights' ShapleyMCG and
-    CC BY-NC-ND terms in the image folder.
+- **Replace the vLLM GLM-5.3-Flash image with the MiaAI-Lab TensorFold recipe**
+  - Remove `vllm-glm-5-3-flash-exl3-gb10`; the TensorFold runtime supersedes it
+    for the same two-DGX-Spark deployment.
+  - Vendor the MiaAI-Lab GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold recipe
+    unmodified at commit `05397e24`, with a per-file hash lock of the upstream
+    tree.
+  - Materialize the image the upstream builds as a shell heredoc in
+    `scripts/prepare.sh` as a checked-in Dockerfile: digest-pinned
+    `nvcr.io/nvidia/pytorch:26.07-py3` arm64 base, no base-image build
+    arguments, TensorFold pinned by commit instead of the `v0.6.0` tag, and the
+    recipe's `tf.patches` kernel-cache label recorded and verified against the
+    vendored patches at build time.
+  - Record the recipe's Apache-2.0 license (not the AGPL-3.0 of the sibling
+    MiaAI-Lab vLLM recipe), TensorFold's Apache-2.0 and pre-`v0.6.0` MIT terms,
+    and the runtime weights' Apache-2.0, CC BY-NC-ND 4.0 and ShapleyMCG terms in
+    the image folder.
 
 ## v0.1.0 (2026-08-14)
 
