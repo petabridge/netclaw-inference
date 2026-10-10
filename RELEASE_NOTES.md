@@ -12,6 +12,12 @@ Images:
 
 Changes:
 
+- **Check the AMD serving CLI during the image build**
+  - Parse the multimodal MTP serving arguments with `--help`, catching removed
+    or incompatible flags without requiring model weights or GPU hardware.
+  - Document the v0.6.0 migration from `--no-mmap` to `--load-mode none` and
+    the separate draft-model requirement for DFlash. Model loading and draft
+    acceptance remain hardware qualification checks before promotion.
 - **Bump llama.cpp to v0.6.0 for the AMD ROCm gfx1201 AVX2 image**
   - Move the upstream llama.cpp source pin from commit `9b05354` (build
     `b10433`) to `d812350` (build `b11429`), the tagged `v0.6.0` release.
