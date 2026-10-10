@@ -3,7 +3,7 @@
 Repository releases may contain one or more independently promoted inference
 images. Every release section lists the image ids affected by that release.
 
-## v0.2.0 (Unreleased)
+## v0.2.0 (2026-10-10)
 
 Images:
 
