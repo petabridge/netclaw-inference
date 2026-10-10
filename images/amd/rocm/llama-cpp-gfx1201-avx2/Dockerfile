@@ -51,8 +51,8 @@ RUN set -euxo pipefail; \
 # Pinned, checksum-verified llama.cpp source (immutable upstream commit).
 # GitHub commit archives are byte-stable, so BuildKit refuses the download
 # unless the archive bytes match this digest.
-ADD --checksum=sha256:3757add5ecea48727edf81b56d3e233eb82332d30ac475f23aa3efec4c647d1c \
-    https://github.com/ggml-org/llama.cpp/archive/9b05354ec6fb58b4e665e9a39ebc40285c015638.tar.gz \
+ADD --checksum=sha256:6b58785f0a82898f4c3442417ff962e2d4b231b1bee5d033902ad90b27901e14 \
+    https://github.com/ggml-org/llama.cpp/archive/d81235049384534c167caea52b85a694f6103d14.tar.gz \
     /tmp/llama.cpp.tar.gz
 
 RUN set -euxo pipefail; \
@@ -122,9 +122,9 @@ LABEL org.opencontainers.image.title="Petabridge llama.cpp ROCm gfx1201 AVX2 ser
       org.opencontainers.image.base.name="rocm/dev-ubuntu-24.04" \
       org.opencontainers.image.base.digest="sha256:8ab378c7264c7e15496f548392c518a6b2feeb322d6233364c6c2ebc8e7ffb42" \
       io.petabridge.llamacpp.build.kind="pinned-source-full-build" \
-      io.petabridge.llamacpp.upstream.commit="9b05354ec6fb58b4e665e9a39ebc40285c015638" \
-      io.petabridge.llamacpp.upstream.build="b10433" \
-      io.petabridge.llamacpp.source.archive.sha256="3757add5ecea48727edf81b56d3e233eb82332d30ac475f23aa3efec4c647d1c" \
+      io.petabridge.llamacpp.upstream.commit="d81235049384534c167caea52b85a694f6103d14" \
+      io.petabridge.llamacpp.upstream.build="b11429" \
+      io.petabridge.llamacpp.source.archive.sha256="6b58785f0a82898f4c3442417ff962e2d4b231b1bee5d033902ad90b27901e14" \
       io.petabridge.rocm.version="7.2.3" \
       io.petabridge.gpu.targets="gfx1201" \
       io.petabridge.cpu.baseline="x86-64-v3-avx2-no-avx512"
