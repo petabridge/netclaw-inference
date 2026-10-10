@@ -35,9 +35,20 @@ nothing is inherited prebuilt. The exact inputs and build flags are recorded in
 
 ## Status
 
-Source-build candidate; hardware qualification pending. The image is
-`build_enabled` so CI can produce an immutable `sha-<commit>` candidate; promote
-to a release tag only after it is validated on `gfx1201` hardware.
+Qualified on 2026-10-10 on AMD Radeon AI PRO R9700 (`gfx1201`) hardware
+with an AVX2 CPU. The tested candidate is `sha-537bde70589a`, manifest digest
+`sha256:776dc59f61818b9e0d06dd535ba69d98c765f1cfd95a6cd8eaa2d927b2ccf8a5`.
+
+Qualification used Qwen3.8-27B UD-Q4_K_XL with BF16 mmproj, embedded MTP
+(`--spec-type draft-mtp --spec-draft-n-max 3`), q8_0 KV, 262144 context, and
+two slots per server across two GPUs. Readiness, non-thinking chat, forced
+tool-call JSON, vision, and four simultaneous requests passed. Both servers
+remained running with zero restarts through a subsequent reconciliation;
+MTP draft acceptance and stable VRAM/GTT allocations were observed.
+
+This qualifies that serving configuration with short functional and concurrency
+checks. Maximum-context load, extended soak tests, and DFlash require separate
+qualification. Promote the tested digest rather than rebuilding it for release.
 
 ## Running
 
