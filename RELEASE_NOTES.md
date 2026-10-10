@@ -3,7 +3,7 @@
 Repository releases may contain one or more independently promoted inference
 images. Every release section lists the image ids affected by that release.
 
-## v0.2.0 (Unreleased)
+## v0.2.0 (2026-10-10)
 
 Images:
 
@@ -12,6 +12,13 @@ Images:
 
 Changes:
 
+- **Qualify the AMD v0.6.0 image with embedded MTP**
+  - Verify readiness, non-thinking chat, tool calls, vision, and four
+    simultaneous requests on two gfx1201 GPUs with an AVX2 CPU.
+  - Retain Qwen3.8-27B UD-Q4_K_XL, q8_0 KV, two slots per server and MTP/3;
+    observe draft acceptance, stable memory, and zero restarts.
+  - Record the tested candidate digest in the image README. DFlash and
+    extended or maximum-context qualification remain separate.
 - **Check the AMD serving CLI during the image build**
   - Parse the multimodal MTP serving arguments with `--help`, catching removed
     or incompatible flags without requiring model weights or GPU hardware.
