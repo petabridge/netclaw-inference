@@ -1,0 +1,42 @@
+TensorFold: the MIT notice that survives from before v0.6.0
+==========================================================
+
+This image installs [TensorFold](https://github.com/ashhart/TensorFold) and applies the
+vendored recipe's patches to the installed package, so TensorFold's code — patched — ships
+inside the image. TensorFold moved to the Apache License 2.0 at v0.6.0; code written before
+v0.6.0 keeps its MIT notice, which this file retains for that portion of the engine.
+
+The notice below is reproduced verbatim from the upstream recipe's `NOTICE` file
+(`MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold` at commit
+`05397e24ee1fa0a60df11ff5dcb7a68f45cff6cd`), which is vendored unmodified as
+`recipe/NOTICE`. TensorFold's own `NOTICE` reads: "TensorFold / Copyright 2026 TensorFold
+contributors / https://github.com/ashhart/TensorFold".
+
+Note on the upstream license: the upstream recipe is **Apache-2.0**, not AGPL-3.0 and not
+MIT. The only MIT material it carries is TensorFold's pre-v0.6.0 notice below (and
+ExLlamaV3, credited for the EXL3 format but not bundled in this image). See
+`THIRD_PARTY_NOTICES.md`.
+
+----------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2026 TensorFold contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
