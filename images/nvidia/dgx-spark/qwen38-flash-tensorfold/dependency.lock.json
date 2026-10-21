@@ -1,0 +1,105 @@
+{
+  "schema_version": 2,
+  "base_image": {
+    "reference": "nvcr.io/nvidia/pytorch:26.07-py3",
+    "digest": "sha256:7531d90bcbe0e43e1f7363029c7e145ce90eebeb494a7b4695fdba0329d7c3c3",
+    "platform": "linux/arm64",
+    "role": "NVIDIA PyTorch container; the base the upstream recipe names (recipe/scripts/config.sh BASE_IMAGE), for both build stages",
+    "digest_note": "The linux/arm64 manifest of nvcr.io/nvidia/pytorch:26.07-py3, resolved anonymously via nvcr.io's token and manifest endpoints on 2026-10-21 (no NGC login required); the same digest the GLM-5.3-Flash TensorFold image pins. Both FROM lines in ./Dockerfile pin it."
+  },
+  "upstream_recipe": {
+    "repository": "https://github.com/MiaAI-Lab/Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold",
+    "commit": "be3ed857ab1055ca47b36134d22691f00f2bb94a",
+    "commit_date": "2026-10-08T13:03:15+03:00",
+    "license": "Apache-2.0",
+    "license_note": "The recipe's own code, scripts and documentation are Apache-2.0 (recipe/LICENSE, recipe/NOTICE). Its NOTICE asks redistributors of a modified version to keep the NOTICE and state what changed: recipe/ is unmodified, and the change (0010) is kept and described outside it, in petabridge-patches/ and ./README.md.",
+    "vendored_paths": [
+      ".github/",
+      "patches/",
+      "scripts/",
+      "tools/",
+      ".gitignore",
+      "CHANGELOG.md",
+      "CREDITS.md",
+      "LICENSE",
+      "NOTICE",
+      "README.md",
+      "start.sh",
+      "stop.sh"
+    ],
+    "vendored_files": 37,
+    "patches": 9,
+    "lock": "upstream-recipe.sha256",
+    "lock_sha256": "485bb00e9d2b9b474969d09804869aa22a104de8871c26e7249f36144f0f130e",
+    "lock_note": "Hashes of every file of the pinned commit (git ls-files), byte-identical to git's blobs (verified file by file against git cat-file). The upstream ships no Dockerfile: it builds its image from a shell heredoc inside recipe/scripts/prepare.sh (lines 175-220). This image folder materializes that heredoc as ./Dockerfile."
+  },
+  "petabridge_changes": {
+    "status": "prototype; not built, not run on GPUs",
+    "dockerfile_diff": "petabridge-dockerfile.diff",
+    "dockerfile_diff_sha256": "79abf55226be8158183fff9c982339da16a57eaca6950a556de306942ade36fd",
+    "dockerfile_origin": "Materialized from recipe/scripts/prepare.sh lines 175-220 (the `docker build ... -f - \"$ctx\"` heredoc) at the pinned commit. Deviations are marked PETABRIDGE: in ./Dockerfile and itemized in ./README.md (build boundary).",
+    "patches": [
+      {
+        "file": "petabridge-patches/0010-media-prompt-reuse.patch",
+        "sha256": "0f2f7fdd525026abbb2a666ed8ed83254cd8d0f086e3e12a54779cacf9045219",
+        "applies_after": "recipe/patches/0001-0009 (git apply in the TensorFold checkout's root, filename order)",
+        "license": "Apache-2.0",
+        "summary": "Image and video prompts keep and resume prompt states: per-picture content keys from the vision helper, keyed cache ids, media history marks, the media table attached before a resume's MTP absorb, media on keep segments, a fixed per-image visual-token cap, an optional host-side tower-feature cache, and a \"prompt_cache\": false request field for exactness checks."
+      }
+    ],
+    "tools": [
+      "petabridge-tools/media_exact.py",
+      "petabridge-tools/media_prompt_reuse.py",
+      "petabridge-tools/media_images.py"
+    ],
+    "tools_note": "GPU test tools for the prototype, run against a served endpoint; not part of the image. They import the vendored recipe/tools/client.py.",
+    "patch_set_label": {
+      "label": "tf.patches",
+      "value": "50cb44760834",
+      "upstream_value_without_0010": "f3e1300f4f62",
+      "origin": "recipe/scripts/config.sh image_hash() computed with 0010 placed in recipe/patches/: sha256 over patches/*.patch (0001-0010), the prepare.sh heredoc and the build inputs line, first 12 hex characters. Upstream's own 0001-0009 give f3e1300f4f62 (its published IMAGE_TAG zig-db28187-f3e1300f4f62), reproduced here. ./Dockerfile records the value literally and verifies it in the build stage. tf.kernels is \"present\", as prepare.sh passes it."
+    }
+  },
+  "source_dependencies": {
+    "tensorfold": {
+      "repository": "https://github.com/ashhart/TensorFold",
+      "branch": "zig-flashnext",
+      "commit": "db281878ddb836fd0df510d8771ecb7e0fe47d26",
+      "install": "git fetch --depth 1 of the commit, git apply of the patches, zig build fatbins install native (./Dockerfile build stage)",
+      "license": "Apache-2.0 from v0.6.0; code written before v0.6.0 keeps its MIT notice (recipe/NOTICE quotes it)",
+      "pin_note": "The upstream recipe already pins TF_REF by immutable commit (recipe/scripts/config.sh); the build asserts git rev-parse HEAD equals it."
+    },
+    "zig": {
+      "version": "0.17.0",
+      "url": "https://ziglang.org/download/0.17.0/zig-aarch64-linux-0.17.0.tar.xz",
+      "sha256": "9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8",
+      "license": "MIT (Expat)",
+      "note": "Build stage only; not in the final image. Checked with sha256sum -c in the build."
+    }
+  },
+  "python_packages": {
+    "note": "The upstream recipe's final-stage installs, kept as-is: version-pinned, not hash-pinned, and huggingface_hub is a range. Pin them by URL and checksum before enabling the build if the supply-chain bar for this image is to match the DeepSeek V4 image's.",
+    "huggingface_hub": { "requirement": ">=1.0", "license": "Apache-2.0" },
+    "transformers": { "version": "5.17.0", "install": "--no-deps", "license": "Apache-2.0" },
+    "av": { "version": "19.0.1", "install": "--no-deps", "license": "BSD-3-Clause (PyAV); LGPL FFmpeg libraries" }
+  },
+  "runtime_models": {
+    "note": "Weights are NOT in the image. recipe/scripts/prepare.sh downloads the pinned revision into the host Hugging Face cache; the ranks mount it.",
+    "target": {
+      "repository": "nvidia/Qwen3.8-Flash-Next-NVFP4",
+      "revision": "fc694b54fb0174e0913e6adf86691ef85a4ead47",
+      "license": "NVIDIA Open Model License, with the Qwen Community License 1.0 as additional information (per its model card; recipe/NOTICE)",
+      "note": "QUANT=nvfp4, the recipe's default, ~124 GiB. The same revision testlab-setup's qwen38-tensorfold deployment pins."
+    },
+    "alternate": {
+      "repository": "azampatti/Qwen3.8-Flash-Next-125B-A5B-INT4-AutoRound",
+      "revision": "1464274120d36a4d8fcaa934552334a7d83ce0fd",
+      "license": "see recipe/NOTICE",
+      "note": "QUANT=int4ar; not exercised by the 0010 prototype."
+    }
+  },
+  "provenance": {
+    "repository": "https://github.com/MiaAI-Lab/Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold",
+    "commit": "be3ed857ab1055ca47b36134d22691f00f2bb94a"
+  }
+}

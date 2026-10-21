@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../schemas/image.schema.json",
+  "schema_version": 1,
+  "id": "tensorfold-qwen3-8-flash-gb10",
+  "description": "Qwen3.8-Flash-Next NVFP4 TensorFold Zig engine (MiaAI-Lab recipe) for two NVIDIA DGX Sparks, with Petabridge's image prompt reuse patch",
+  "vendor": "nvidia",
+  "hardware_family": "dgx-spark",
+  "platform": "linux/arm64",
+  "registry_repository": "petabridge/tensorfold-qwen3-8-flash-gb10",
+  "build_enabled": true,
+  "context": "images/nvidia/dgx-spark/qwen38-flash-tensorfold",
+  "dockerfile": "images/nvidia/dgx-spark/qwen38-flash-tensorfold/Dockerfile"
+}
