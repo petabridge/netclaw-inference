@@ -1,10 +1,10 @@
-# Qwen3.8-Flash-Next TensorFold on DGX Spark, with image prompt reuse (prototype)
+# Qwen3.8-Flash-Next TensorFold on DGX Spark, with image prompt reuse (candidate)
 
 Image id: `tensorfold-qwen3-8-flash-gb10` (`ghcr.io/petabridge/tensorfold-qwen3-8-flash-gb10`)
 
-> **Prototype, not built and not qualified.** `image.json` has `build_enabled: false`. The
-> Petabridge patch in this folder has passed host-side tests only (no GPU); nothing here is
-> deployed. Enable the build only after the [test plan](#test-plan) passes on two DGX Sparks.
+> **Candidate, not qualified.** The build is enabled so a `sha-<commit>` candidate can be run
+> through the GPU steps of the [test plan](#test-plan) on two DGX Sparks. The Petabridge patch has
+> passed host-side tests only so far. Do not promote this image until the GPU steps pass.
 
 A reproducible build of the
 [MiaAI-Lab Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold)
@@ -108,7 +108,7 @@ Host-side (done for this prototype; no GPU):
 - `tests/test_media_prompt_reuse.py` (10 tests, CPU torch): keys, fixed cap versus shared split,
   fallback past the budget, the feature cache (LRU, per-image encode, hits equal fresh rows).
 
-On two DGX Sparks (to do before enabling the build):
+On two DGX Sparks (to do before promotion):
 
 1. Build this image; the build stage verifies `tf.patches`. Serve with
    `TF_FLASHNEXT_PREFILL_DIGEST=1`.

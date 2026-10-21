@@ -7,7 +7,7 @@ images. Every release section lists the image ids affected by that release.
 
 Images:
 
-- `tensorfold-qwen3-8-flash-gb10` (prototype; `build_enabled: false`, not promotable yet)
+- `tensorfold-qwen3-8-flash-gb10` (candidate; not promotable until GPU qualification passes)
 
 Changes:
 
@@ -28,8 +28,9 @@ Changes:
     checks.
   - Host-side tests pass (Zig unit and server tests, the CUDA server compiles
     and links, Python helper tests on CPU). GPU exactness and reuse tools are
-    included under `petabridge-tools/` but have not been run; the build stays
-    disabled until they pass on two DGX Sparks.
+    included under `petabridge-tools/` but have not been run. The build is
+    enabled so a `sha-<commit>` candidate can be qualified on two DGX Sparks;
+    promotion waits until those tests pass.
 
 ## v0.2.0 (2026-10-10)
 
