@@ -3,6 +3,34 @@
 Repository releases may contain one or more independently promoted inference
 images. Every release section lists the image ids affected by that release.
 
+## v0.3.0 (Unreleased)
+
+Images:
+
+- `tensorfold-qwen3-8-flash-gb10` (prototype; `build_enabled: false`, not promotable yet)
+
+Changes:
+
+- **Add a Qwen3.8-Flash-Next TensorFold image definition with image prompt reuse (prototype)**
+  - Vendor the MiaAI-Lab Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold recipe
+    unmodified at commit `be3ed857` (37 files, per-file hash lock), and
+    materialize its inline Dockerfile heredoc: digest-pinned
+    `nvcr.io/nvidia/pytorch:26.07-py3` arm64 base in both stages, build
+    arguments as pinned defaults, and the `tf.patches` label recorded and
+    verified at build time.
+  - Add Petabridge patch `0010-media-prompt-reuse`, applied after the
+    recipe's 0001-0009: image and video prompts keep and resume prompt states
+    by per-picture content keys instead of always prefilling from token 0; a
+    fixed per-image visual-token cap (`TENSORFOLD_IMAGE_TOKENS_EACH`, default
+    1024) so an added image never refits earlier ones; an optional host-side
+    tower-feature cache; the media rotary table attached before a resume's
+    MTP absorb; and a `"prompt_cache": false` request field for exactness
+    checks.
+  - Host-side tests pass (Zig unit and server tests, the CUDA server compiles
+    and links, Python helper tests on CPU). GPU exactness and reuse tools are
+    included under `petabridge-tools/` but have not been run; the build stays
+    disabled until they pass on two DGX Sparks.
+
 ## v0.2.0 (2026-10-10)
 
 Images:

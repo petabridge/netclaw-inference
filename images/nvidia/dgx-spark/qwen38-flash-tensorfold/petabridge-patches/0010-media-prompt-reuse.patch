@@ -1,0 +1,1361 @@
+# 0010-media-prompt-reuse: image and video prompts keep and resume prompt states (prefix cache) on the Zig engine.
+#
+# Petabridge prototype, applied after the recipe's 0001-0009 (git apply in the TensorFold checkout's root, as
+# scripts/prepare.sh applies them). Apache-2.0, as TensorFold and the recipe are.
+#
+# Before this patch a prompt with images or video was neither resumed nor kept (lane_host.zig's lookup gate and
+# cuda_engine.zig's error.MediaPromptKept), so a multi-turn conversation with screenshots prefilled from token 0 on
+# every turn. The approach follows the GLM-5.3-Flash TensorFold recipe's image prompt reuse (issue #11 of that
+# recipe): kept states are keyed by the prompt's ids with each picture's content key written into its rows.
+#
+# What changes:
+# - vision helper (Python): each picture and video frame group gets a 64-bit content key (decoded pixels' hash, the
+#   pixel cap it was fitted under, its processed grid; tensorfold/vision/media_keys.py), sent as the reply header's
+#   item_keys. A fixed per-image visual-token cap (TENSORFOLD_IMAGE_TOKENS_EACH, default 1024; 0 = upstream's shared
+#   split) applies while images x cap fits TENSORFOLD_IMAGE_TOKENS, so an added image never refits earlier ones;
+#   past that the request falls back to the shared split (served, but resumes nothing past its first image). An
+#   optional host-side feature cache (TENSORFOLD_VISION_FEATURE_CACHE_MB, default 512; 0 = off) encodes each picture
+#   alone and reuses its tower rows by key on later turns.
+# - server: the ids the prompt cache sees are the prompt's with every picture row replaced by
+#   0x80000000 | (hash(key, row) & 0x7fffffff), and row 0 tagged, so image and text states are never mixed
+#   (prompt_cache.mediaKeyed, Request.cache_key); an image prompt's history length is found as the text path finds
+#   it (the template's generation suffix), so its keep points are planned. "prompt_cache": false in a request
+#   prefills from 0 and keeps nothing (for exactness checks).
+# - engine: the MediaPromptKept refusals are gone; the media table is attached before a resume's MTP absorb (it
+#   rotates through the table, as a fresh pass's absorb of that row did); keep segments carry the whole prompt's
+#   media (Media.check accepts a prefix; the table is cut to the segment; a following rank's row count may pass the
+#   segment); TF_FLASHNEXT_PREFILL_DIGEST also prints the sliced fill's chunk digests.
+#
+# Prototype: host-side tests only (zig build test, zig/tests/server/zig_test.sh, tests/test_media_prompt_reuse.py);
+# not yet run on GPUs. See the Petabridge image README for the exactness test plan.
+
+diff --git a/src/tensorfold/vision/media_keys.py b/src/tensorfold/vision/media_keys.py
+new file mode 100644
+index 0000000..fe09c9d
+--- /dev/null
++++ b/src/tensorfold/vision/media_keys.py
+@@ -0,0 +1,115 @@
++"""PETABRIDGE 0010: per-picture content keys for exact prompt reuse of image prompts, and a host-side cache of each
++picture's tower features.
++
++Placeholder tokens are the same id for every picture, so the Zig engine's prompt cache cannot tell two pictures with
++the same grid apart by tokens alone. Each picture's (or video frame group's) prompt rows get a 64-bit key of what
++fills them: the decoded pixels' content hash, the pixel cap it was fitted under and its processed grid. The engine
++writes the key into those rows of the ids it keys kept states by (``prompt_cache.mediaKeyed``).
++
++The approach follows the GLM-5.3-Flash TensorFold recipe's image prompt reuse (MiaAI-Lab, issue #11 of that recipe):
++keys substituted into the picture rows, features computed only where needed. Apache-2.0.
++"""
++
++from __future__ import annotations
++
++from collections import OrderedDict
++import hashlib
++import os
++from typing import Any, Sequence
++
++KEY_VERSION = b"tensorfold-qwen-media-key-v1\0"
++
++
++def _key(*parts: Any) -> str:
++    digest = hashlib.sha256(KEY_VERSION)
++    for part in parts:
++        digest.update(repr(part).encode())
++        digest.update(b"\0")
++    return digest.hexdigest()[:16]
++
++
++def image_key(content_hash: str, cap: int, grid: Sequence[int]) -> str:
++    """One picture's key (16 hex): its decoded pixels, the pixel cap it was fitted under and its processed grid."""
++
++    return _key("image", content_hash, int(cap), tuple(int(v) for v in grid))
++
++
++def item_keys(prepared) -> list[tuple[int, int, str]]:
++    """Every picture's and video frame group's prompt rows [start, end) with its key, ascending; [] when the prepared
++    prompt does not say enough to key every item (no prompt reuse then, never a wrong one)."""
++
++    out: list[tuple[int, int, str]] = []
++    spans = tuple(prepared.image_spans)
++    hashes = tuple(getattr(prepared, "image_hashes", ()))
++    caps = tuple(getattr(prepared, "image_caps", ()))
++    grid = prepared.image_grid_thw
++    if len(hashes) != len(spans) or len(caps) != len(spans) or len(grid) != len(spans):
++        return []
++    for (start, end), h, cap, g in zip(spans, hashes, caps, grid):
++        out.append((int(start), int(end), image_key(h, cap, g)))
++    frames = tuple(getattr(prepared, "video_spans", ()))
++    if frames:
++        videos = getattr(prepared, "video_grid_thw", None)
++        vhashes = tuple(getattr(prepared, "video_hashes", ()))
++        if videos is None or len(vhashes) != len(videos):
++            return []
++        groups = []                      # one frame group a temporal step of each video, as media_positions splits it
++        for vh, (t, h, w) in zip(vhashes, videos):
++            for j in range(int(t)):
++                groups.append(_key("video", vh, (int(t), int(h), int(w)), j, len(videos)))
++        if len(groups) != len(frames):
++            return []
++        out.extend((int(s), int(e), k) for (s, e), k in zip(frames, groups))
++    out.sort()
++    if any(end <= start for start, end, _ in out) or any(b[0] < a[1] for a, b in zip(out, out[1:])):
++        return []
++    return out
++
++
++def env_int(name: str, default: int, low: int, high: int) -> int:
++    raw = os.environ.get(name, "").strip()
++    if not raw:
++        return default
++    value = int(raw)
++    if not low <= value <= high:
++        raise ValueError(f"{name} must be from {low} to {high}, not {value}")
++    return value
++
++
++class FeatureCache:
++    """Each picture's tower rows by its key, in host memory, least recently used first out, at most ``limit``
++    bytes. A picture is encoded alone, so its rows do not depend on the other pictures of the request: a hit is the
++    same bits a fresh encode gives."""
++
++    def __init__(self, limit: int) -> None:
++        self.limit = int(limit)
++        self.held = 0
++        self.items: OrderedDict[str, Any] = OrderedDict()
++        self.hits = 0
++        self.misses = 0
++
++    @staticmethod
++    def _bytes(value) -> int:
++        return int(value.numel()) * int(value.element_size())
++
++    def get(self, key: str):
++        value = self.items.get(key)
++        if value is None:
++            self.misses += 1
++            return None
++        self.items.move_to_end(key)
++        self.hits += 1
++        return value
++
++    def put(self, key: str, value) -> None:
++        size = self._bytes(value)
++        if size > self.limit:
++            return
++        old = self.items.pop(key, None)
++        if old is not None:
++            self.held -= self._bytes(old)
++        while self.items and self.held + size > self.limit:
++            _, gone = self.items.popitem(last=False)
++            self.held -= self._bytes(gone)
++        self.items[key] = value
++        self.held += size
+diff --git a/src/tensorfold/vision/native_helper.py b/src/tensorfold/vision/native_helper.py
+index 8e3e886..1508e62 100644
+--- a/src/tensorfold/vision/native_helper.py
++++ b/src/tensorfold/vision/native_helper.py
+@@ -31,6 +31,16 @@ from dataclasses import replace
+ # sharing 16,384 visual tokens (each at most 4,096), 10 MB an image, 64 MB and 128 Mi pixels in all; up to two
+ # videos (user messages), 64 MB each, 96 MB in all
+ MAX_IMAGES, IMAGE_TOKENS = 50, 16384
++# PETABRIDGE 0010: each image's fixed visual-token cap (TENSORFOLD_IMAGE_TOKENS_EACH; 0: the shared split above).
++# While images x cap fits the request's TENSORFOLD_IMAGE_TOKENS, every image is fitted under the cap alone, so a
++# later turn's added image never refits the earlier ones and their kept prompt states stay valid. A request past it
++# falls back to the shared split (TENSORFOLD_IMAGE_TOKENS // images), which refits every image whenever the count
++# changes: it is served, but resumes nothing past its first image. TENSORFOLD_IMAGE_TOKENS >= TENSORFOLD_MAX_IMAGES x
++# the cap (50 x 1,024 = 51,200) never falls back.
++IMAGE_TOKENS_EACH = 1024
++# PETABRIDGE 0010: host memory for each picture's tower rows by its content key (TENSORFOLD_VISION_FEATURE_CACHE_MB;
++# 0: no cache, the tower runs the request's images together as upstream does)
++FEATURE_CACHE_MB = 512
+ IMAGES_TOTAL_BYTES, IMAGES_TOTAL_PIXELS = 64 * 1024 * 1024, 128 * 1024 * 1024
+ VIDEO_BYTES, VIDEOS_TOTAL_BYTES = 64 * 1024 * 1024, 96 * 1024 * 1024
+ 
+@@ -59,7 +69,8 @@ def _write(out, header: dict, payload: list[bytes] = ()) -> None:
+ 
+ 
+ class Helper:
+-    def __init__(self, model: str, *, allow_urls: bool, max_images: int, image_tokens: int, workspace: int, max_videos: int = 4) -> None:
++    def __init__(self, model: str, *, allow_urls: bool, max_images: int, image_tokens: int, workspace: int, max_videos: int = 4,
++                 image_tokens_each: int = 0, feature_cache_mb: int = 0) -> None:
+         import torch
+ 
+         from .images import DEFAULT_LIMITS
+@@ -72,6 +83,10 @@ class Helper:
+         started = time.perf_counter()
+         self.vision = QwenCudaVision(model, device, allow_urls=allow_urls)
+         self.allow_urls = allow_urls
++        self.image_tokens_each = image_tokens_each
++        if feature_cache_mb > 0:            # PETABRIDGE 0010: pictures encoded alone, their rows kept by key
++            from .media_keys import FeatureCache
++            self.vision.feature_cache = FeatureCache(feature_cache_mb << 20)
+         self.limits = replace(DEFAULT_LIMITS, max_images=max_images, max_visual_tokens=image_tokens,
+                               max_total_encoded_bytes=IMAGES_TOTAL_BYTES, max_total_pixels=IMAGES_TOTAL_PIXELS)
+         self.video_limits = replace(DEFAULT_VIDEO_LIMITS, max_videos=max_videos, max_encoded_bytes=VIDEO_BYTES,
+@@ -160,7 +175,8 @@ class Helper:
+             budget["videos"] = load_videos(clips, self.vision.video_size, limits=self.video_limits,
+                                            allow_urls=self.allow_urls)
+         limit = request.get("max_prompt_tokens")
+-        return self.vision.prepare(prompt, images, max_prompt_tokens=int(limit) if limit else None, **budget)
++        return self.vision.prepare(prompt, images, max_prompt_tokens=int(limit) if limit else None,
++                                   fixed_image_tokens=self.image_tokens_each or None, **budget)
+ 
+     def handle(self, request: dict) -> tuple[dict, list[bytes]]:
+         import numpy as np
+@@ -175,9 +191,15 @@ class Helper:
+         tokens = np.asarray(prepared.token_ids, dtype="<u4").tobytes()
+         rows = np.asarray(encoded.rows, dtype="<u4").tobytes()
+         t2 = time.perf_counter()
++        hits = int(getattr(self.vision, "cache_hits", 0))
+         del encoded
+         torch.cuda.empty_cache()
++        from .media_keys import item_keys
++        keys = item_keys(prepared)          # PETABRIDGE 0010: each picture's rows and key (the engine's cache key)
+         header = {"ok": True, "tokens": len(prepared.token_ids), "rows": len(rows) // 4,
++                  "item_keys": [[start, end, key] for start, end, key in keys],
++                  "fixed_cap": bool(getattr(prepared, "fixed_cap", False)),
++                  "feature_hits": hits,
+                   "delta": int(prepared.rope_delta), "width": int(self.vision.config["out_hidden_size"]),
+                   "images": len(prepared.image_spans), "video_groups": len(prepared.video_spans),
+                   "videos": len(prepared.video_hashes), "visual_tokens": int(prepared.visual_tokens),
+@@ -198,17 +220,33 @@ def main() -> int:
+     ap.add_argument("--max-videos", type=int, default=int(os.environ.get("TENSORFOLD_MAX_VIDEOS") or 4))
+     ap.add_argument("--image-tokens", type=int,
+                     default=int(os.environ.get("TENSORFOLD_IMAGE_TOKENS") or IMAGE_TOKENS))
++    ap.add_argument("--image-tokens-each", type=int,
++                    default=int(os.environ.get("TENSORFOLD_IMAGE_TOKENS_EACH") or IMAGE_TOKENS_EACH)
++                    if os.environ.get("TENSORFOLD_IMAGE_TOKENS_EACH", "").strip() != "0" else 0)
++    ap.add_argument("--feature-cache-mib", type=int,
++                    default=int(os.environ.get("TENSORFOLD_VISION_FEATURE_CACHE_MB") or FEATURE_CACHE_MB)
++                    if os.environ.get("TENSORFOLD_VISION_FEATURE_CACHE_MB", "").strip() != "0" else 0)
+     ap.add_argument("--workspace-mib", type=int,
+                     default=int(os.environ.get("TENSORFOLD_VISION_WORKSPACE_MIB") or 4096))
+     a = ap.parse_args()
+     if not 1 <= a.max_videos <= 64 or not 1 <= a.max_images <= 256 or not 1 <= a.image_tokens <= 65536 or not 0 <= a.workspace_mib <= 16384:
+         print("--max-images 1..256, --image-tokens 1..65536, --workspace-mib 0..16384", file=sys.stderr)
+         return 2
++    if not 0 <= a.image_tokens_each <= 4096 or not 0 <= a.feature_cache_mib <= 16384:
++        print("--image-tokens-each 0..4096 (TENSORFOLD_IMAGE_TOKENS_EACH), --feature-cache-mib 0..16384 "
++              "(TENSORFOLD_VISION_FEATURE_CACHE_MB)", file=sys.stderr)
++        return 2
++    if a.image_tokens_each and a.image_tokens_each * a.max_images > a.image_tokens:
++        _log(f"image cap: {a.image_tokens_each} tokens an image while images x cap fits {a.image_tokens}: requests "
++             f"with more than {a.image_tokens // a.image_tokens_each} images share the budget (no prompt reuse past "
++             f"their first image); TENSORFOLD_IMAGE_TOKENS={a.image_tokens_each * a.max_images} covers "
++             f"{a.max_images} images")
+     out = sys.stdout.buffer
+     sys.stdout = sys.stderr                  # nothing but frames on the pipe
+     try:
+         helper = Helper(a.model, allow_urls=a.urls, max_images=a.max_images, max_videos=a.max_videos, image_tokens=a.image_tokens,
+-                        workspace=a.workspace_mib << 20)
++                        workspace=a.workspace_mib << 20, image_tokens_each=a.image_tokens_each,
++                        feature_cache_mb=a.feature_cache_mib)
+     except Exception as exc:  # noqa: BLE001 - the parent reads why
+         _write(out, {"ready": False, "error": f"{type(exc).__name__}: {exc}"})
+         return 1
+diff --git a/src/tensorfold/vision/qwen_cuda.py b/src/tensorfold/vision/qwen_cuda.py
+index 895ce7e..574ab2e 100644
+--- a/src/tensorfold/vision/qwen_cuda.py
++++ b/src/tensorfold/vision/qwen_cuda.py
+@@ -268,12 +268,28 @@ class QwenCudaVision:
+         validate_encoded(rows, positions, prepared.rope_delta, prompt, self.media_tokens,
+                          ((patches + clips) // merge**2, self.config["out_hidden_size"]),
+                          self.config["out_hidden_size"])
++        cache = getattr(self, "feature_cache", None)
++        keys = None
++        if cache is not None:
++            from .media_keys import item_keys
++            keyed = {start: key for start, _, key in item_keys(prepared)}
++            keys = [keyed.get(start) for start, _ in prepared.image_spans]
++        self.cache_hits = 0
+         with torch.inference_mode(), sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]):
+             blocks = {}                                  # span start -> its features, in the tower's order
+             starts = iter(start for start, _ in prepared.image_spans)
+-            # images never attend to one another: runs of whole images, at most MAX_PATCHES a tower call (one call,
+-            # as before, whenever the request fits it), so the scratch stays what one full-size image needs
+-            for begin, end in image_runs(sizes, MAX_PATCHES):
++            # PETABRIDGE 0010: with the feature cache, each image is encoded alone (its rows then never depend on the
++            # request's other images) and its rows are kept by its content key; a hit skips the tower for it
++            runs = [(i, i + 1) for i in range(len(sizes))] if keys is not None else image_runs(sizes, MAX_PATCHES)
++            for begin, end in runs:
++                if keys is not None and keys[begin] is not None:
++                    hit = cache.get(keys[begin])
++                    if hit is not None:
++                        blocks[next(starts)] = hit.to(device=self.device)
++                        self.cache_hits += 1
++                        continue
++                # images never attend to one another: runs of whole images, at most MAX_PATCHES a tower call (one
++                # call, as before, whenever the request fits it), so the scratch stays what one full-size image needs
+                 done = sum(sizes[:begin])
+                 # a copy: the prepared arrays are read-only, and a tensor may not share them
+                 pixels = torch.tensor(prepared.pixel_values[done:done + sum(sizes[begin:end])],
+@@ -282,6 +298,8 @@ class QwenCudaVision:
+                 features = self.tower(pixels, grid_thw=grids, return_dict=True).pooler_output
+                 for part in features.to(dtype=torch.bfloat16).split([s // merge**2 for s in sizes[begin:end]]):
+                     blocks[next(starts)] = part
++                    if keys is not None and keys[begin] is not None:   # one image a run here
++                        cache.put(keys[begin], part.detach().to(device="cpu", copy=True))
+             if clips:
+                 # frame groups never attend to one another either: a video encodes a bounded run of them at a time
+                 done, spans_left = 0, iter(frames)
+diff --git a/src/tensorfold/vision/qwen_processing.py b/src/tensorfold/vision/qwen_processing.py
+index cd7fbfc..b7e2f08 100644
+--- a/src/tensorfold/vision/qwen_processing.py
++++ b/src/tensorfold/vision/qwen_processing.py
+@@ -27,6 +27,10 @@ class PreparedVisionPrompt:
+     video_grid_thw: np.ndarray | None = None
+     video_spans: tuple[tuple[int, int], ...] = ()
+     video_hashes: tuple[str, ...] = ()
++    # PETABRIDGE 0010: each image's pixel cap (the max_pixels it was fitted under), in image order, and whether the
++    # request ran under the fixed per-image cap (an image's size then never depends on the other images)
++    image_caps: tuple[int, ...] = ()
++    fixed_cap: bool = False
+ 
+     @property
+     def visual_tokens(self) -> int:
+@@ -180,7 +184,7 @@ class QwenImageProcessor:
+ 
+     def prepare(self, rendered_prompt: str, images: Sequence[Any], *, videos: Sequence[Any] = (),
+                 max_visual_tokens: int = 4096, max_prompt_tokens: int | None = None,
+-                max_image_tokens: int | None = None) -> PreparedVisionPrompt:
++                max_image_tokens: int | None = None, fixed_image_tokens: int | None = None) -> PreparedVisionPrompt:
+         """Expand image (and video) markers and calculate request-local rotary metadata without touching the GPU.
+         A video marker (``<|vision_start|><|video_pad|><|vision_end|>``) becomes one timestamped block a frame group,
+         ``<t seconds><|vision_start|>pads<|vision_end|>``, as Qwen3-VL's processor writes it."""
+@@ -199,14 +203,20 @@ class QwenImageProcessor:
+         merge = int(vision["spatial_merge_size"])
+         expected_width = (int(vision.get("in_channels", 3)) * int(vision["temporal_patch_size"])
+                           * int(vision["patch_size"])**2)
+-        parts, grids = [], []
++        parts, grids, caps = [], [], []
++        fixed = False
+         if images:
+             limit = max_visual_tokens // len(images)
++            # PETABRIDGE 0010: a fixed per-image cap when every image fits it inside the request's budget, so adding
++            # an image never refits the earlier ones (kept prompt states stay valid); else the shared split, as before
++            if fixed_image_tokens and fixed_image_tokens * len(images) <= max_visual_tokens:
++                limit, fixed = fixed_image_tokens, True
+             if max_image_tokens:             # each image at most this many, however few share the budget
+                 limit = min(limit, max_image_tokens)
+             per_image = min(int(getattr(self.processor, "max_pixels", limit * factor**2)), limit * factor**2)
+         for image in images:
+             cap = min(per_image, 256 * factor**2) if getattr(image, "detail", "auto") == "low" else per_image
++            caps.append(int(cap))
+             result = self.processor(images=[image.to_pil()], max_pixels=cap,
+                                     min_pixels=min(int(getattr(self.processor, "min_pixels", factor**2)), cap))
+             pixels, grid = np.asarray(result["pixel_values"]), np.asarray(result["image_grid_thw"], dtype=np.int64)
+@@ -249,7 +259,7 @@ class QwenImageProcessor:
+                 array.setflags(write=False)
+         return PreparedVisionPrompt(tokens, pixels, grid, positions, delta, spans,
+                                     tuple(image.content_hash for image in images), video_pixels, video_grid, frames,
+-                                    tuple(video.content_hash for video in videos))
++                                    tuple(video.content_hash for video in videos), tuple(caps), fixed)
+ 
+     def video_size(self, frames: int, height: int, width: int) -> tuple[int, int]:
+         """A video's frame size for the tower: Qwen3-VL's ``smart_resize`` with its per-frame cap (at most 768 tokens a
+diff --git a/tests/test_media_prompt_reuse.py b/tests/test_media_prompt_reuse.py
+new file mode 100644
+index 0000000..195bad4
+--- /dev/null
++++ b/tests/test_media_prompt_reuse.py
+@@ -0,0 +1,198 @@
++"""PETABRIDGE 0010: image prompts' content keys, the fixed per-image cap and the helper's feature cache (CPU only)."""
++
++from __future__ import annotations
++
++import hashlib
++from types import SimpleNamespace as NS
++
++import numpy as np
++import pytest
++
++from tensorfold.vision import media_keys
++from tensorfold.vision.media_keys import FeatureCache, image_key, item_keys
++from tensorfold.vision.qwen_processing import QwenImageProcessor
++
++CONFIG = {"model_type": "qwen3_5", "image_token_id": 10, "video_token_id": 11,
++          "vision_start_token_id": 8, "vision_end_token_id": 9,
++          "vision_config": {"spatial_merge_size": 2, "patch_size": 16, "temporal_patch_size": 2,
++                            "out_hidden_size": 3, "in_channels": 3}}
++SPECIAL = {"<start>": 8, "<end>": 9, "<image>": 10}
++
++
++class Tokenizer:
++    def convert_ids_to_tokens(self, token):
++        return {v: k for k, v in SPECIAL.items()}.get(token)
++
++    def convert_tokens_to_ids(self, token):
++        return SPECIAL.get(token)
++
++    def __call__(self, text, **kwargs):
++        ids = []
++        while text:
++            found = next((t for t in SPECIAL if text.startswith(t)), None)
++            if found:
++                ids.append(SPECIAL[found])
++                text = text[len(found):]
++            else:
++                ids.append(ord(text[0]))
++                text = text[1:]
++        return {"input_ids": ids}
++
++
++class ImageProcessor:
++    """Fits a 64x64-patch picture under max_pixels: the grid shrinks with the cap; pixels carry the picture's name."""
++
++    max_pixels, min_pixels = 1024**2, 32**2
++
++    def __init__(self):
++        self.calls = []
++
++    def __call__(self, *, images, max_pixels, min_pixels):
++        self.calls.append(max_pixels)
++        side = 2
++        while ((side + 2) * 16) ** 2 <= max_pixels and side < 8:
++            side += 2                                    # merge-aligned sides, at most 8 patches
++        name = images[0]
++        fill = int(hashlib.sha256(name.encode()).hexdigest()[:4], 16) / 65536.0
++        pixels = np.full((side * side, 1536), fill, np.float32)
++        return {"pixel_values": pixels, "image_grid_thw": np.array([[1, side, side]])}
++
++
++def picture(name, detail="auto"):
++    return NS(content_hash="sha-" + name, detail=detail, to_pil=lambda: name)
++
++
++def front():
++    return QwenImageProcessor(CONFIG, ImageProcessor(), Tokenizer())
++
++
++def prompt(n):
++    return "".join(f"t{i}<start><image><end>" for i in range(n)) + "end"
++
++
++def test_keys_tell_pictures_apart_by_content_cap_and_grid():
++    assert image_key("a", 4096, (1, 4, 4)) == image_key("a", 4096, (1, 4, 4))
++    assert len(image_key("a", 4096, (1, 4, 4))) == 16
++    assert image_key("a", 4096, (1, 4, 4)) != image_key("b", 4096, (1, 4, 4))   # same grid, other pixels
++    assert image_key("a", 4096, (1, 4, 4)) != image_key("a", 2048, (1, 4, 4))   # fitted under another cap
++    assert image_key("a", 4096, (1, 4, 4)) != image_key("a", 4096, (1, 2, 8))   # another grid
++
++
++def test_item_keys_cover_each_pictures_rows_or_nothing():
++    prepared = front().prepare(prompt(2), [picture("a"), picture("b")], max_visual_tokens=64,
++                               fixed_image_tokens=16)
++    keys = item_keys(prepared)
++    assert [(s, e) for s, e, _ in keys] == list(prepared.image_spans)
++    assert keys[0][2] != keys[1][2]
++    # a prepared prompt that does not say enough to key every picture: no keys (no reuse, never a wrong one)
++    from dataclasses import replace
++    assert item_keys(replace(prepared, image_caps=prepared.image_caps[:1])) == []
++    assert item_keys(replace(prepared, image_hashes=())) == []
++
++
++def test_a_fixed_cap_never_refits_earlier_images_when_one_is_added():
++    two = front().prepare(prompt(2), [picture("a"), picture("b")], max_visual_tokens=64, fixed_image_tokens=16)
++    three = front().prepare(prompt(3), [picture("a"), picture("b"), picture("c")], max_visual_tokens=64,
++                            fixed_image_tokens=16)
++    assert two.fixed_cap and three.fixed_cap
++    assert two.image_caps == three.image_caps[:2] == (16 * 32**2,) * 2
++    assert item_keys(two) == item_keys(three)[:2]                   # the same keys, rows and grids
++    assert three.token_ids[:len(two.token_ids) - 3] == two.token_ids[:-3]   # the earlier turn's rows unchanged
++
++
++def test_without_the_fixed_cap_an_added_image_refits_the_others_and_changes_their_keys():
++    two = front().prepare(prompt(2), [picture("a"), picture("b")], max_visual_tokens=64)
++    three = front().prepare(prompt(3), [picture("a"), picture("b"), picture("c")], max_visual_tokens=64)
++    assert not two.fixed_cap and not three.fixed_cap
++    assert two.image_caps[0] == 32 * 32**2 and three.image_caps[0] == 21 * 32**2
++    assert item_keys(two)[0][2] != item_keys(three)[0][2]
++
++
++def test_a_request_past_the_budget_falls_back_to_the_shared_split():
++    images = [picture(str(i)) for i in range(5)]
++    prepared = front().prepare(prompt(5), images, max_visual_tokens=64, fixed_image_tokens=16)   # 5 x 16 > 64
++    assert not prepared.fixed_cap
++    assert prepared.image_caps == ((64 // 5) * 32**2,) * 5
++
++
++def test_low_detail_and_the_per_image_ceiling_still_apply_under_the_fixed_cap():
++    prepared = front().prepare(prompt(2), [picture("a", "low"), picture("b")], max_visual_tokens=64,
++                               fixed_image_tokens=16, max_image_tokens=8)
++    assert prepared.fixed_cap and prepared.image_caps == (8 * 32**2, 8 * 32**2)
++
++
++def test_feature_cache_is_least_recently_used_within_its_bytes():
++    torch = pytest.importorskip("torch")
++    cache = FeatureCache(3 * 4 * 2 * 2)                 # two [4, 3] bf16 entries... and a bit
++    a, b, c = (torch.full((4, 3), float(i), dtype=torch.bfloat16) for i in range(3))
++    cache.put("a", a)
++    cache.put("b", b)
++    assert cache.get("a") is a                          # a is now the most recent
++    cache.put("c", c)                                   # evicts b
++    assert cache.get("b") is None and cache.get("a") is a and cache.get("c") is c
++    assert cache.held <= cache.limit
++    cache.put("huge", torch.zeros((100, 3), dtype=torch.bfloat16))   # past the limit: not kept
++    assert cache.get("huge") is None and cache.get("a") is a
++
++
++def _vision(cache):
++    torch = pytest.importorskip("torch")
++    from tensorfold.vision.qwen_cuda import QwenCudaVision
++
++    v = object.__new__(QwenCudaVision)
++    v.config = dict(CONFIG["vision_config"])
++    v.videos = False
++    v.image_token = 10
++    v.media_tokens = frozenset({10})
++    v.device = torch.device("cpu")
++    v.calls = []
++
++    def tower(pixels, grid_thw, return_dict):
++        v.calls.append(int(grid_thw.shape[0]))
++        rows = pixels.shape[0] // 4
++        base = pixels.float().reshape(rows, 4, -1).mean(dim=(1, 2), keepdim=False)
++        out = torch.stack([base, base * 2, base + torch.arange(rows, dtype=torch.float32)], dim=1)
++        return NS(pooler_output=out)
++
++    v.tower = tower
++    if cache:
++        v.feature_cache = FeatureCache(1 << 20)
++    return v
++
++
++def test_the_feature_cache_encodes_each_picture_once_and_gives_the_same_rows():
++    torch = pytest.importorskip("torch")
++    vision = _vision(cache=True)
++    two = front().prepare(prompt(2), [picture("a"), picture("b")], max_visual_tokens=64, fixed_image_tokens=16)
++    first = vision._encode(two, two.token_ids)
++    assert vision.cache_hits == 0 and vision.calls == [1, 1]          # each picture alone
++    three = front().prepare(prompt(3), [picture("a"), picture("b"), picture("c")], max_visual_tokens=64,
++                            fixed_image_tokens=16)
++    vision.calls.clear()
++    second = vision._encode(three, three.token_ids)
++    assert vision.cache_hits == 2 and vision.calls == [1]             # only the new picture through the tower
++    rows_two = first.features.shape[0]
++    assert torch.equal(second.features[:rows_two], first.features)    # the earlier pictures' rows, bit for bit
++    fresh = _vision(cache=True)._encode(three, three.token_ids)
++    assert torch.equal(second.features, fresh.features)               # a hit equals a fresh encode
++
++
++def test_without_the_cache_the_tower_runs_the_request_together_as_upstream():
++    pytest.importorskip("torch")
++    vision = _vision(cache=False)
++    two = front().prepare(prompt(2), [picture("a"), picture("b")], max_visual_tokens=64, fixed_image_tokens=16)
++    vision._encode(two, two.token_ids)
++    assert vision.calls == [2]
++
++
++def test_env_int_bounds():
++    import os
++
++    os.environ["TF_TEST_MEDIA_INT"] = "12"
++    try:
++        assert media_keys.env_int("TF_TEST_MEDIA_INT", 1, 0, 100) == 12
++        with pytest.raises(ValueError):
++            media_keys.env_int("TF_TEST_MEDIA_INT", 1, 0, 10)
++    finally:
++        del os.environ["TF_TEST_MEDIA_INT"]
++    assert media_keys.env_int("TF_TEST_MEDIA_INT", 7, 0, 10) == 7
+diff --git a/zig/src/core/engine_api.zig b/zig/src/core/engine_api.zig
+index ec26b4a..4f68708 100644
+--- a/zig/src/core/engine_api.zig
++++ b/zig/src/core/engine_api.zig
+@@ -80,8 +80,13 @@ pub const Request = struct {
+     structure: ?Structure = null,
+     /// Stop a short exact cycle while the think block is open.
+     loop_guard: bool = false,
+-    /// The prompt's images and videos (``Info.media`` engines only); such a prompt is never kept or resumed.
++    /// The prompt's images and videos (``Info.media`` engines only).
+     media: ?*const Media = null,
++    /// PETABRIDGE 0010: the ids the prompt cache keys this prompt's kept states by (``prompt_cache.mediaKeyed``: each
++    /// picture's rows carry its content key); null: ``prompt``. An image prompt without one is neither kept nor resumed.
++    cache_key: ?[]const u32 = null,
++    /// PETABRIDGE 0010: false: neither resumed nor kept (a fresh prompt pass, as an exactness check compares).
++    prompt_cache: bool = true,
+ };
+ 
+ pub const Reason = enum { stop, length, cancelled, failed };
+diff --git a/zig/src/core/lane_host.zig b/zig/src/core/lane_host.zig
+index 5f87384..3e01b63 100644
+--- a/zig/src/core/lane_host.zig
++++ b/zig/src/core/lane_host.zig
+@@ -61,7 +61,7 @@ pub const LaneHost = struct {
+         fn kept(ptr: *anyopaque, s: *lanes.Stream, at: u32) void {
+             const job: *Job = @ptrCast(@alignCast(ptr));
+             job.reported(); // before a keep can evict the entry the pass restored
+-            if (job.host.cache) |store| _ = store.keep(job.request.prompt, at, s);
++            if (job.host.cache) |store| _ = store.keep(cacheIds(job.request) orelse return, at, s);
+         }
+ 
+         /// The pass started from its kept state, or its copy failed (the entry goes); a pass that never got there: neither.
+@@ -71,10 +71,19 @@ pub const LaneHost = struct {
+             const store = job.host.cache orelse return;
+             if (!job.started) return;
+             job.stream.reuse.saved = null; // the backend restores before its first chunk; a later keep may free it
+-            if (job.stream.reuse_failed) store.resumed(e, job.request.prompt, false) else if (job.stream.cached == e.at) store.resumed(e, job.request.prompt, true);
++            const ids = cacheIds(job.request) orelse return;
++            if (job.stream.reuse_failed) store.resumed(e, ids, false) else if (job.stream.cached == e.at) store.resumed(e, ids, true);
+         }
+     };
+ 
++    /// PETABRIDGE 0010: the ids a request's kept states are found by: its cache key (an image prompt's pictures keyed
++    /// into their rows), else its prompt; null for an image prompt without a key (never kept or resumed).
++    fn cacheIds(r: *const Request) ?[]const u32 {
++        if (!r.prompt_cache) return null;
++        if (r.cache_key) |k| return if (k.len == r.prompt.len) k else null;
++        return if (r.media == null) r.prompt else null;
++    }
++
+     pub fn init(gpa: Allocator, io: std.Io, core: *lanes.Engine, info_: Info) LaneHost {
+         var enforced = info_;
+         enforced.loop_guard = true;
+@@ -298,8 +307,9 @@ pub const LaneHost = struct {
+         const r = job.request;
+         var reuse: lanes.stream.Reuse = .{};
+         // the entry stays alive until the backend restores it: nothing keeps between here and this stream's own pass
+-        // a prompt with images or video is neither resumed nor kept (Python keeps token-only states)
+-        if (r.media == null) if (h.cache) |store| if (store.lookup(h.gpa, r.prompt, r.history_len, r.shared_prefixes, r.chunks)) |l| {
++        // PETABRIDGE 0010: an image prompt is resumed and kept by its cache key (its pictures' keys in their rows);
++        // one without a key is neither (cacheIds)
++        if (cacheIds(r)) |ids| if (h.cache) |store| if (store.lookup(h.gpa, ids, r.history_len, r.shared_prefixes, r.chunks)) |l| {
+             job.entry = l.entry;
+             job.kept0 = store.counts.kept;
+             job.marks = l.marks;
+diff --git a/zig/src/core/lane_host_reuse_test.zig b/zig/src/core/lane_host_reuse_test.zig
+index 3855da5..60a2718 100644
+--- a/zig/src/core/lane_host_reuse_test.zig
++++ b/zig/src/core/lane_host_reuse_test.zig
+@@ -258,3 +258,133 @@ test "a lane host fills prompts between rounds: requests arriving together fill
+     }
+     try std.testing.expect(target.fill_steps > 0);
+ }
++
++test "PETABRIDGE 0010: an image prompt resumes by its cache key, never another picture's state, and without a key keeps nothing" {
++    const gpa = std.testing.allocator;
++    var cfg = try lanes.Config.init(gpa, .{ .exact_width = 8, .gpu_tokens = true, .hidden_rows = true }, 8, 7);
++    defer cfg.deinit(gpa);
++    var target: lanes.fake.Fake = .{ .gpa = gpa };
++    defer target.deinit();
++    var clock: lanes.fake.FixedClock = .{};
++    var core = lanes.Engine.init(gpa, &cfg, target.backend(), clock.clock());
++    defer core.deinit();
++    const Snaps = struct {
++        fn bytes(_: *anyopaque, at: u32) u64 {
++            return 64 + 4 * @as(u64, at);
++        }
++        fn save(ptr: *anyopaque, owner: ?*anyopaque, at: u32) anyerror!pc.Saved {
++            const f: *lanes.fake.Fake = @ptrCast(@alignCast(ptr));
++            return f.save(@ptrCast(@alignCast(owner.?)), at);
++        }
++        fn restore(_: *anyopaque, _: ?*anyopaque, _: pc.Saved) anyerror!void {
++            return error.BackendRestores;
++        }
++        fn drop(ptr: *anyopaque, saved: pc.Saved) void {
++            const f: *lanes.fake.Fake = @ptrCast(@alignCast(ptr));
++            f.drop(saved);
++        }
++    };
++    var store = pc.Store.init(gpa, .{ .ptr = &target, .vtable = &.{ .bytes = Snaps.bytes, .save = Snaps.save, .restore = Snaps.restore, .drop = Snaps.drop } }, .{ .min_gap = 4, .min_prompt = 0 }, 1 << 20);
++    defer store.deinit();
++    var host = LaneHost.init(gpa, std.testing.io, &core, .{ .lanes = 2 });
++    host.cache = &store;
++    try host.start();
++    defer host.stop();
++    const Box = struct {
++        mutex: std.Io.Mutex = .init,
++        tokens: std.ArrayList(u32) = .empty,
++        cached: ?u32 = null,
++        done: ?Reason = null,
++        fn event(ctx: *anyopaque, _: Id, e: *const Event) void {
++            const b: *@This() = @ptrCast(@alignCast(ctx));
++            b.mutex.lockUncancelable(std.testing.io);
++            defer b.mutex.unlock(std.testing.io);
++            switch (e.*) {
++                .prefilled => |c| b.cached = c,
++                .tokens => |t| b.tokens.appendSlice(gpa, t) catch {},
++                .finished => |f| b.done = f.reason,
++            }
++        }
++        fn wait(b: *@This()) Reason {
++            while (true) {
++                b.mutex.lockUncancelable(std.testing.io);
++                const d = b.done;
++                b.mutex.unlock(std.testing.io);
++                if (d) |r| return r;
++                std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake) catch {};
++            }
++        }
++    };
++    const e = host.engine();
++    const PAD: u32 = 77;
++    // the fake engine ignores the features: only the keys say which picture fills rows 2..5
++    const feats: [8]u8 = @splat(0);
++    const t1 = [_]u32{ 3, 1, PAD, PAD, PAD, PAD, 2, 6, 5, 3 };
++    var pos1: [3 * t1.len]i32 = @splat(0);
++    const m1: api.Media = .{ .rows = &.{ 2, 3, 4, 5 }, .positions = &pos1, .delta = 0, .features = &feats, .width = 1 };
++    const span_a = [_]pc.MediaSpan{.{ .start = 2, .end = 6, .key = 0xA }};
++    const k1 = try pc.mediaKeyed(gpa, &t1, &span_a);
++    defer gpa.free(k1);
++    var b1: Box = .{};
++    defer b1.tokens.deinit(gpa);
++    const r1: Request = .{ .prompt = &t1, .max_tokens = 6, .history_len = 8, .media = &m1, .cache_key = k1 };
++    try e.submit(1, &r1, .{ .ctx = &b1, .event = Box.event });
++    try std.testing.expectEqual(Reason.length, b1.wait());
++    try std.testing.expectEqual(@as(?u32, 0), b1.cached);
++    try std.testing.expectEqual(@as(usize, 1), store.entries.items.len);
++
++    var t2: std.ArrayList(u32) = .empty; // the next turn, the same picture
++    defer t2.deinit(gpa);
++    try t2.appendSlice(gpa, &t1);
++    try t2.appendSlice(gpa, b1.tokens.items[0..4]);
++    try t2.appendSlice(gpa, &.{ 7, 7, 5, 3 });
++    const pos2 = try gpa.alloc(i32, 3 * t2.items.len);
++    defer gpa.free(pos2);
++    @memset(pos2, 0);
++    const m2: api.Media = .{ .rows = &.{ 2, 3, 4, 5 }, .positions = pos2, .delta = 0, .features = &feats, .width = 1 };
++    const k2 = try pc.mediaKeyed(gpa, t2.items, &span_a);
++    defer gpa.free(k2);
++    var b2: Box = .{};
++    defer b2.tokens.deinit(gpa);
++    const r2: Request = .{ .prompt = t2.items, .max_tokens = 12, .history_len = @intCast(t2.items.len - 2), .media = &m2, .cache_key = k2 };
++    try e.submit(2, &r2, .{ .ctx = &b2, .event = Box.event });
++    try std.testing.expectEqual(Reason.length, b2.wait());
++    try std.testing.expectEqual(@as(?u32, 8), b2.cached);
++    var history: std.ArrayList(u32) = .empty; // replies of a resumed pass equal a fresh one's
++    defer history.deinit(gpa);
++    try history.appendSlice(gpa, t2.items);
++    for (b2.tokens.items) |t| {
++        try std.testing.expectEqual(lanes.fake.next(history.items, null, history.items.len), t);
++        try history.append(gpa, t);
++    }
++
++    // the same tokens with picture B (same grid): no state of picture A is taken
++    const kb = try pc.mediaKeyed(gpa, t2.items, &.{.{ .start = 2, .end = 6, .key = 0xB }});
++    defer gpa.free(kb);
++    var b3: Box = .{};
++    defer b3.tokens.deinit(gpa);
++    const r3: Request = .{ .prompt = t2.items, .max_tokens = 4, .history_len = @intCast(t2.items.len - 2), .media = &m2, .cache_key = kb };
++    try e.submit(3, &r3, .{ .ctx = &b3, .event = Box.event });
++    try std.testing.expectEqual(Reason.length, b3.wait());
++    try std.testing.expectEqual(@as(?u32, 0), b3.cached);
++
++    // an image prompt without a cache key: neither resumed nor kept
++    const kept_before = store.counts.kept;
++    var b4: Box = .{};
++    defer b4.tokens.deinit(gpa);
++    const r4: Request = .{ .prompt = t2.items, .max_tokens = 4, .history_len = @intCast(t2.items.len - 2), .media = &m2 };
++    try e.submit(4, &r4, .{ .ctx = &b4, .event = Box.event });
++    try std.testing.expectEqual(Reason.length, b4.wait());
++    try std.testing.expectEqual(@as(?u32, 0), b4.cached);
++    try std.testing.expectEqual(kept_before, store.counts.kept);
++
++    // "prompt_cache": false with picture A's key: a fresh pass (nothing resumed or kept), the same reply as resumed
++    var b5: Box = .{};
++    defer b5.tokens.deinit(gpa);
++    const r5: Request = .{ .prompt = t2.items, .max_tokens = 12, .history_len = @intCast(t2.items.len - 2), .media = &m2, .cache_key = k2, .prompt_cache = false };
++    try e.submit(5, &r5, .{ .ctx = &b5, .event = Box.event });
++    try std.testing.expectEqual(Reason.length, b5.wait());
++    try std.testing.expectEqual(@as(?u32, 0), b5.cached);
++    try std.testing.expectEqual(kept_before, store.counts.kept);
++    try std.testing.expectEqualSlices(u32, b2.tokens.items, b5.tokens.items);
++}
+diff --git a/zig/src/core/lanes/stream.zig b/zig/src/core/lanes/stream.zig
+index 1e3c65f..ee7c40f 100644
+--- a/zig/src/core/lanes/stream.zig
++++ b/zig/src/core/lanes/stream.zig
+@@ -99,7 +99,9 @@ pub const Held = struct {
+ /// A prompt's images and video frames as the vision frontend prepared them (Python's EncodedVision): the prompt
+ /// rows the visual features replace (ascending), each prompt row's three rotary positions (t, h, w: [n, 3] row
+ /// major, i32), the decode offset (text after the prompt rotates at its position + delta) and the features
+-/// (bf16 [rows.len, width]). A prompt with media prefills from its start and keeps no prefix states.
++/// (bf16 [rows.len, width]). PETABRIDGE 0010: an image prompt keeps and resumes prefix states like a text prompt
++/// (found by its pictures' keys, prompt_cache.mediaKeyed); a keep segment, a prefix of the prompt, is prefilled
++/// with the whole prompt's media (its rows past the segment are never reached, its table is cut to the segment).
+ pub const Media = struct {
+     rows: []const u32,
+     positions: []const i32,
+@@ -118,17 +120,25 @@ pub const Media = struct {
+         return m.rowCount() * @as(usize, m.width) * 2;
+     }
+ 
++    /// The media's own prompt length (rank 0: its positions' rows; a following rank's copy does not know it: 0).
++    pub fn promptLen(m: *const Media) usize {
++        return m.positions.len / 3;
++    }
++
++    /// Valid for a prompt pass over the first `prompt_len` tokens of the media's prompt: the whole prompt, or a keep
++    /// segment (a prefix of it). Rows past the segment stay in the media and are never reached.
+     pub fn check(m: *const Media, prompt_len: usize) error{BadMedia}!void {
+         if (m.follower_rows > 0) {
+-            if (m.rows.len != 0 or m.positions.len != 0 or m.features.len != 0 or m.width == 0 or m.follower_rows > prompt_len) return error.BadMedia;
++            // the row count may pass a keep segment's length (its rows past the segment are never reached)
++            if (m.rows.len != 0 or m.positions.len != 0 or m.features.len != 0 or m.width == 0 or prompt_len == 0) return error.BadMedia;
+             return;
+         }
+-        if (m.rows.len == 0 or m.positions.len != 3 * prompt_len or m.width == 0) return error.BadMedia;
++        if (m.rows.len == 0 or m.positions.len % 3 != 0 or m.promptLen() < prompt_len or prompt_len == 0 or m.width == 0) return error.BadMedia;
+         // a following rank's copy carries no features (they arrive by broadcast)
+         if (m.features.len != 0 and m.features.len != m.featureBytes()) return error.BadMedia;
+         var last: ?u32 = null;
+         for (m.rows) |r| {
+-            if (r >= prompt_len or (last != null and r <= last.?)) return error.BadMedia;
++            if (r >= m.promptLen() or (last != null and r <= last.?)) return error.BadMedia;
+             last = r;
+         }
+         for (m.positions) |p| if (p < 0) return error.BadMedia;
+@@ -421,7 +431,10 @@ test "media rows, positions and features must cover the prompt" {
+     const pos: [15]i32 = @splat(0);
+     var m: Media = .{ .rows = &.{ 1, 2 }, .positions = &pos, .delta = -1, .features = &feats, .width = 4 };
+     try m.check(5);
+-    try std.testing.expectError(error.BadMedia, m.check(4)); // positions of another prompt
++    try m.check(4); // a keep segment: a prefix of the media's prompt
++    try m.check(2); // a segment that ends inside the picture rows
++    try std.testing.expectError(error.BadMedia, m.check(6)); // a longer prompt than the media's
++    try std.testing.expectError(error.BadMedia, m.check(0));
+     m.rows = &.{ 2, 1 };
+     try std.testing.expectError(error.BadMedia, m.check(5)); // rows out of order
+     m.rows = &.{ 1, 2 };
+@@ -429,4 +442,11 @@ test "media rows, positions and features must cover the prompt" {
+     try m.check(5);
+     m.features = feats[0..8];
+     try std.testing.expectError(error.BadMedia, m.check(5));
++    m.features = &feats;
++    m.rows = &.{ 1, 5 };
++    try std.testing.expectError(error.BadMedia, m.check(5)); // a row past the media's own prompt
++    // a following rank's copy: its row count may pass a keep segment's length
++    const follower: Media = .{ .rows = &.{}, .positions = &.{}, .delta = -1, .features = &.{}, .width = 4, .follower_rows = 300 };
++    try follower.check(100);
++    try std.testing.expectError(error.BadMedia, follower.check(0));
+ }
+diff --git a/zig/src/core/prompt_cache.zig b/zig/src/core/prompt_cache.zig
+index cddee5b..5ed59d2 100644
+--- a/zig/src/core/prompt_cache.zig
++++ b/zig/src/core/prompt_cache.zig
+@@ -328,6 +328,35 @@ pub const Store = struct {
+     }
+ };
+ 
++/// One picture's (or video frame group's) placeholder rows [start, end) in a prompt and a 64-bit key of what fills
++/// them: its pixels, the per-picture token cap it was fitted under and its processed grid (the vision frontend's
++/// key). Placeholder tokens are all the same id, so a kept state of an image prompt is found by `mediaKeyed` ids.
++pub const MediaSpan = struct { start: u32, end: u32, key: u64 };
++
++/// A prompt's ids with every picture row replaced by 0x80000000 | (hash(key, row) & 0x7fffffff): equal prefixes then
++/// mean the same pictures in the same places, not only the same placeholder tokens. Real ids stay below 2^31 (every
++/// vocabulary does), so a keyed row never equals a token. Spans must be ascending, inside the prompt, not overlapping.
++/// Row 0 is tagged too (0x80000000 | hash(token 0)): an image prompt's text rows rotate through its rotary table
++/// (another kernel mode than a text prompt's), so its states and a text prompt's are never taken for each other, even
++/// before its first picture. Image prompts still share their common prefix with each other.
++pub fn mediaKeyed(a: Allocator, prompt: []const u32, spans: []const MediaSpan) error{ OutOfMemory, BadMediaSpans }![]u32 {
++    const out = try a.dupe(u32, prompt);
++    errdefer a.free(out);
++    if (spans.len == 0) return out;
++    if (prompt.len > 0) out[0] = 0x8000_0000 | @as(u32, @truncate(std.hash.Wyhash.hash(0x6d656469615f7230, std.mem.asBytes(&prompt[0])) & 0x7fff_ffff));
++    var last: u32 = 0;
++    for (spans) |sp| {
++        if (sp.start < last or sp.end <= sp.start or sp.end > prompt.len) return error.BadMediaSpans;
++        for (sp.start..sp.end) |r| {
++            var words: [2]u64 = .{ sp.key, r - sp.start };
++            const h = std.hash.Wyhash.hash(0x6d656469615f6b65, std.mem.sliceAsBytes(&words));
++            out[r] = 0x8000_0000 | @as(u32, @truncate(h & 0x7fff_ffff));
++        }
++        last = sp.end;
++    }
++    return out;
++}
++
+ /// A line on the engine's log; tests stay quiet (the build runner fails a test that writes to stderr).
+ fn note(comptime fmt: []const u8, args: anytype) void {
+     if (@import("builtin").is_test) return;
+@@ -345,4 +374,5 @@ fn floorStart(starts: []const u32, at: u32) u32 {
+ 
+ test {
+     _ = @import("prompt_cache_test.zig");
++    _ = @import("prompt_cache_media_test.zig");
+ }
+diff --git a/zig/src/core/prompt_cache_media_test.zig b/zig/src/core/prompt_cache_media_test.zig
+new file mode 100644
+index 0000000..2d996a3
+--- /dev/null
++++ b/zig/src/core/prompt_cache_media_test.zig
+@@ -0,0 +1,159 @@
++//! Image prompts in the prompt cache: kept states are found by `mediaKeyed` ids, so two pictures with the same grid
++//! (the same placeholder tokens) never share a state, while the same picture resumes exactly. The fake family's
++//! state is a running sum over the keyed ids, standing in for the picture features a real prompt pass reads.
++const std = @import("std");
++const pc = @import("prompt_cache.zig");
++const Allocator = std.mem.Allocator;
++
++const Fake = struct {
++    gpa: Allocator,
++    at: u32 = 0,
++    sum: u64 = 0,
++
++    const State = struct { at: u32, sum: u64 };
++
++    fn snapshots(f: *Fake) pc.Snapshots {
++        return .{ .ptr = f, .vtable = &.{ .bytes = bytesFn, .save = saveFn, .restore = restoreFn, .drop = dropFn } };
++    }
++    fn of(ptr: *anyopaque) *Fake {
++        return @ptrCast(@alignCast(ptr));
++    }
++    fn bytesFn(_: *anyopaque, at: u32) u64 {
++        return 100 + at;
++    }
++    fn saveFn(ptr: *anyopaque, _: ?*anyopaque, at: u32) anyerror!pc.Saved {
++        const f = of(ptr);
++        if (at != f.at) return error.NotAtMark;
++        const st = try f.gpa.create(State);
++        st.* = .{ .at = f.at, .sum = f.sum };
++        return st;
++    }
++    fn restoreFn(ptr: *anyopaque, _: ?*anyopaque, saved: pc.Saved) anyerror!void {
++        const st: *State = @ptrCast(@alignCast(saved));
++        of(ptr).at, of(ptr).sum = .{ st.at, st.sum };
++    }
++    fn dropFn(ptr: *anyopaque, saved: pc.Saved) void {
++        const st: *State = @ptrCast(@alignCast(saved));
++        of(ptr).gpa.destroy(st);
++    }
++
++    /// A pass over `keyed` (the ids the cache sees, which carry each picture's content) from plan.from.
++    fn pass(f: *Fake, s: *pc.Store, keyed: []const u32, plan: pc.Plan) u64 {
++        if (plan.from == 0) f.* = .{ .gpa = f.gpa };
++        var mi: usize = 0;
++        for (keyed[plan.from..]) |t| {
++            f.sum = f.sum *% 31 +% t;
++            f.at += 1;
++            if (mi < plan.marks.len and plan.marks[mi] == f.at) {
++                _ = s.keep(keyed, f.at, null);
++                mi += 1;
++            }
++        }
++        return f.sum;
++    }
++};
++
++fn fresh(keyed: []const u32) u64 {
++    var sum: u64 = 0;
++    for (keyed) |t| sum = sum *% 31 +% t;
++    return sum;
++}
++
++const PAD: u32 = 77; // the image placeholder id: the same for every picture
++
++test "keyed ids: picture rows carry the key and their row, text rows stay, and bad spans are refused" {
++    const a = std.testing.allocator;
++    const prompt = [_]u32{ 1, 2, PAD, PAD, PAD, PAD, 3, 4 };
++    const k1 = try pc.mediaKeyed(a, &prompt, &.{.{ .start = 2, .end = 6, .key = 0x1111 }});
++    defer a.free(k1);
++    const k1b = try pc.mediaKeyed(a, &prompt, &.{.{ .start = 2, .end = 6, .key = 0x1111 }});
++    defer a.free(k1b);
++    const k2 = try pc.mediaKeyed(a, &prompt, &.{.{ .start = 2, .end = 6, .key = 0x2222 }});
++    defer a.free(k2);
++    try std.testing.expectEqualSlices(u32, k1, k1b); // deterministic
++    try std.testing.expect(k1[0] & 0x8000_0000 != 0 and k1[0] == k2[0]); // row 0 tagged: never a text prompt's state
++    try std.testing.expectEqual(prompt[1], k1[1]);
++    try std.testing.expectEqualSlices(u32, prompt[6..], k1[6..]);
++    const plain = try pc.mediaKeyed(a, &prompt, &.{}); // no pictures: the prompt as it is
++    defer a.free(plain);
++    try std.testing.expectEqualSlices(u32, &prompt, plain);
++    for (2..6) |r| {
++        try std.testing.expect(k1[r] & 0x8000_0000 != 0); // never a real token id
++        try std.testing.expect(k1[r] != k2[r]); // another picture differs at every row
++    }
++    // rows of one picture differ from each other (a picture is not a run of one repeated id)
++    try std.testing.expect(k1[2] != k1[3] and k1[3] != k1[4]);
++    try std.testing.expectError(error.BadMediaSpans, pc.mediaKeyed(a, &prompt, &.{.{ .start = 6, .end = 9, .key = 1 }}));
++    try std.testing.expectError(error.BadMediaSpans, pc.mediaKeyed(a, &prompt, &.{ .{ .start = 2, .end = 5, .key = 1 }, .{ .start = 4, .end = 6, .key = 2 } }));
++    try std.testing.expectError(error.BadMediaSpans, pc.mediaKeyed(a, &prompt, &.{.{ .start = 3, .end = 3, .key = 1 }}));
++}
++
++test "two different pictures with the same grid never share a kept state; the same picture resumes and equals a fresh pass" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = pc.Store.init(gpa, f.snapshots(), .{ .min_prompt = 0, .min_gap = 1 }, 1 << 20);
++    defer s.deinit();
++    // turn 1: text, picture A (4 rows), text; history ends at 8
++    const t1 = [_]u32{ 1, 2, PAD, PAD, PAD, PAD, 3, 4, 9, 9 };
++    const span = [_]pc.MediaSpan{.{ .start = 2, .end = 6, .key = 0xA }};
++    const k1 = try pc.mediaKeyed(a, &t1, &span);
++    var p = try s.begin(a, k1, 8, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 0), p.from);
++    try std.testing.expectEqualSlices(u32, &.{8}, p.marks);
++    try std.testing.expectEqual(fresh(k1), f.pass(&s, k1, p));
++
++    // turn 2, same picture A: resumes at 8, past the picture, and equals a fresh pass over the same keyed ids
++    const t2 = [_]u32{ 1, 2, PAD, PAD, PAD, PAD, 3, 4, 9, 5, 6, 9, 9 };
++    const k2 = try pc.mediaKeyed(a, &t2, &span);
++    p = try s.begin(a, k2, 11, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 8), p.from);
++    try std.testing.expectEqual(fresh(k2), f.pass(&s, k2, p));
++
++    // the same conversation shape with picture B (same grid, same placeholder tokens): no kept state matches past
++    // its first row, so the pass starts from 0, never from A's state
++    const kb = try pc.mediaKeyed(a, &t2, &.{.{ .start = 2, .end = 6, .key = 0xB }});
++    try std.testing.expect(s.find(kb, &.{}) == null);
++    try std.testing.expect(!std.mem.eql(u32, k2, kb)); // the real prompt is the same for both: only the key tells them apart
++    p = try s.begin(a, kb, 11, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 0), p.from);
++    try std.testing.expectEqual(fresh(kb), f.pass(&s, kb, p));
++}
++
++test "a new picture in the suffix resumes the kept state before it, and the pass from there equals a fresh one" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = pc.Store.init(gpa, f.snapshots(), .{ .min_prompt = 0, .min_gap = 1 }, 1 << 20);
++    defer s.deinit();
++    const t1 = [_]u32{ 1, PAD, PAD, 2, 3, 9 };
++    const a_span = pc.MediaSpan{ .start = 1, .end = 3, .key = 0xA };
++    const k1 = try pc.mediaKeyed(a, &t1, &.{a_span});
++    _ = f.pass(&s, k1, try s.begin(a, k1, 5, &.{}, &.{}, null)); // keeps at 5
++    // turn 2 adds picture C after the history
++    const t2 = [_]u32{ 1, PAD, PAD, 2, 3, 9, 4, PAD, PAD, PAD, 5, 9 };
++    const k2 = try pc.mediaKeyed(a, &t2, &.{ a_span, .{ .start = 7, .end = 10, .key = 0xC } });
++    const p = try s.begin(a, k2, 11, &.{}, &.{}, null);
++    try std.testing.expectEqual(@as(u32, 5), p.from);
++    try std.testing.expectEqual(fresh(k2), f.pass(&s, k2, p));
++}
++
++test "a kept state inside a picture's rows resumes only the same picture" {
++    const gpa = std.testing.allocator;
++    var arena: std.heap.ArenaAllocator = .init(gpa);
++    defer arena.deinit();
++    const a = arena.allocator();
++    var f: Fake = .{ .gpa = gpa };
++    var s = pc.Store.init(gpa, f.snapshots(), .{ .min_prompt = 0, .min_gap = 1 }, 1 << 20);
++    defer s.deinit();
++    const t = [_]u32{ 1, PAD, PAD, PAD, PAD, 2, 9 };
++    const ka = try pc.mediaKeyed(a, &t, &.{.{ .start = 1, .end = 5, .key = 0xA }});
++    _ = f.pass(&s, ka, try s.begin(a, ka, 3, &.{}, &.{}, null)); // mark at 3: inside the picture
++    const kb = try pc.mediaKeyed(a, &t, &.{.{ .start = 1, .end = 5, .key = 0xB }});
++    try std.testing.expect(s.find(kb, &.{}) == null);
++    try std.testing.expectEqual(@as(u32, 3), s.find(ka, &.{}).?.at);
++}
+diff --git a/zig/src/families/flashnext/cuda_engine.zig b/zig/src/families/flashnext/cuda_engine.zig
+index 9f2ec3a..a28f073 100644
+--- a/zig/src/families/flashnext/cuda_engine.zig
++++ b/zig/src/families/flashnext/cuda_engine.zig
+@@ -792,7 +792,8 @@ pub const Engine = struct {
+         keep_at: ?usize = null,
+         /// resume from a kept state of this sequence (the prompt extends its tokens)
+         resume_from: ?*const Snapshot = null,
+-        /// the prompt's images and video frames (Python prefill(..., vision=)): fresh prompts only, nothing kept
++        /// the prompt's images and video frames (Python prefill(..., vision=)); PETABRIDGE 0010: with keep_at and
++        /// resume_from too (a keep segment passes the whole prompt's media, Media.check)
+         media: ?*const lanes.Media = null,
+     };
+ 
+@@ -894,8 +895,8 @@ pub const Engine = struct {
+         if (e.pfill != null) return error.PromptBuffersBusy; // a sliced fill holds the prompt buffers mid-chunk
+         if (prompt.len + e.depth + 1 > e.bound.st.limit) return error.ContextPastWindow;
+         if (o.keep_at) |k| if (k == 0 or k > prompt.len) return error.BadKeepPoint;
+-        // an image prompt prefills from its start and keeps no token-only snapshot (Python decode.prefill)
+-        if (o.media != null and (o.keep_at != null or o.resume_from != null)) return error.MediaPromptKept;
++        // PETABRIDGE 0010: an image prompt keeps and resumes states too (the prompt cache tells its pictures apart by
++        // key); its media is attached before a resume's MTP absorb, which rotates through the media's table
+         e.setSampling(sampling);
+         const seq = e.bound;
+         const Wd = e.g.wide();
+@@ -913,14 +914,16 @@ pub const Engine = struct {
+             if (!(snap.pos > 0 and snap.pos < prompt.len)) return error.ResumeMustExtend;
+             if (!std.mem.eql(u32, snap.tokens, prompt[0..snap.pos])) return error.ResumeOtherPrompt;
+             try e.restore(seq, snap);
+-            if (use_mtp) {
+-                _ = try mtp.forward(&e.f, seq, pb, prompt[snap.pos .. snap.pos + 1], snap.tail);
+-                try e.f.setMtpLen(&seq.st, seq.st.mtp_len + 1);
+-            }
+             start = snap.pos;
+         } else try e.f.reset(seq);
++        // PETABRIDGE 0010: the table first (restore cleared the decode offset; attachMedia sets it), so the resume's
++        // MTP absorb of row pos - 1 rotates as a fresh pass's absorb of that row did
+         if (o.media) |m| try e.f.attachMedia(seq, m, prompt.len);
+         errdefer e.f.finishMedia(seq);
++        if (o.resume_from) |snap| if (use_mtp) {
++            _ = try mtp.forward(&e.f, seq, pb, prompt[snap.pos .. snap.pos + 1], snap.tail);
++            try e.f.setMtpLen(&seq.st, seq.st.mtp_len + 1);
++        };
+         if (e.pass_times) pw[0] += try e.passLap(&t_pw);
+         var kept: ?*Snapshot = null;
+         errdefer if (kept) |k| e.freeSnapshot(k);
+@@ -1097,7 +1100,7 @@ pub const Engine = struct {
+         if (prompt.len == 0) return error.EmptyPrompt;
+         if (prompt.len + e.depth + 1 > seq.st.limit) return error.ContextPastWindow;
+         if (o.keep_at) |k| if (k == 0 or k > prompt.len) return error.BadKeepPoint;
+-        if (o.media != null and (o.keep_at != null or o.resume_from != null)) return error.MediaPromptKept;
++        // PETABRIDGE 0010: image prompts keep and resume too (see prefillWith)
+         const fl = try e.gpa.create(Fill);
+         errdefer e.gpa.destroy(fl);
+         fl.* = .{ .seq = seq, .prompt = try e.gpa.dupe(u32, prompt), .sampling = if (sampling) |x| (if (x.temperature > 0) x else null) else null, .keep_at = o.keep_at, .use_mtp = e.absorbing and e.w.mtp != null, .start = 0 };
+@@ -1106,13 +1109,15 @@ pub const Engine = struct {
+             if (!(snap.pos > 0 and snap.pos < prompt.len)) return error.ResumeMustExtend;
+             if (!std.mem.eql(u32, snap.tokens, prompt[0..snap.pos])) return error.ResumeOtherPrompt;
+             try e.restore(seq, snap);
+-            if (fl.use_mtp) {
+-                _ = try mtp.forward(&e.f, seq, &e.pbuf, prompt[snap.pos .. snap.pos + 1], snap.tail);
+-                try e.f.setMtpLen(&seq.st, seq.st.mtp_len + 1);
+-            }
+             fl.start = snap.pos;
+         } else try e.f.reset(seq);
++        // PETABRIDGE 0010: the table before the resume's MTP absorb (see prefillWith)
+         if (o.media) |m| try e.f.attachMedia(seq, m, prompt.len);
++        errdefer e.f.finishMedia(seq);
++        if (o.resume_from) |snap| if (fl.use_mtp) {
++            _ = try mtp.forward(&e.f, seq, &e.pbuf, prompt[snap.pos .. snap.pos + 1], snap.tail);
++            try e.f.setMtpLen(&seq.st, seq.st.mtp_len + 1);
++        };
+         return fl;
+     }
+ 
+@@ -1165,6 +1170,9 @@ pub const Engine = struct {
+                 if (e.world > 1) try e.f.th.copy(e.last_cand, pb.b.cand_all, e.world * (2 * state.cand + 1) * 4);
+             }
+             try e.f.th.copy(seq.last_streams.?.ptr, pb.b.streams + (R - 1) * Wd * 2, Wd * 2);
++            // PETABRIDGE 0010: TF_FLASHNEXT_PREFILL_DIGEST on the sliced fill too (the served path), so an exactness
++            // run compares a resumed prompt's final logits with a fresh pass's
++            if (e.digest) try e.chunkDigest(fl.chunk, R, if (final) lg.? else null);
+             const nxt = fl.prompt[fl.start + 1 .. @min(fl.end + 1, fl.prompt.len)];
+             if (fl.use_mtp and nxt.len > 0) {
+                 _ = try mtp.forward(&e.f, seq, pb, nxt, pb.b.streams);
+diff --git a/zig/src/families/flashnext/cuda_forward.zig b/zig/src/families/flashnext/cuda_forward.zig
+index a054b6f..9f07c3d 100644
+--- a/zig/src/families/flashnext/cuda_forward.zig
++++ b/zig/src/families/flashnext/cuda_forward.zig
+@@ -1016,7 +1016,8 @@ pub const Forward = struct {
+         errdefer f.gpa.free(rows);
+         try f.s.synchronize();
+         if (lead) {
+-            try table.?.upload(0, std.mem.sliceAsBytes(media.positions));
++            // PETABRIDGE 0010: a keep segment's table is the first prompt_len rows of the media's (Media.check)
++            try table.?.upload(0, std.mem.sliceAsBytes(media.positions[0 .. 3 * prompt_len]));
+             try feats.?.upload(0, media.features);
+             try rows_dev.?.upload(0, std.mem.sliceAsBytes(media.rows));
+         }
+diff --git a/zig/src/families/flashnext/cuda_lanes.zig b/zig/src/families/flashnext/cuda_lanes.zig
+index d6408c9..ef1e1d7 100644
+--- a/zig/src/families/flashnext/cuda_lanes.zig
++++ b/zig/src/families/flashnext/cuda_lanes.zig
+@@ -260,7 +260,8 @@ pub fn Lanes(comptime E: type) type {
+                 if (m > f.at and m < ids.len) break m;
+             } else null;
+             if (next_mark) |m| {
+-                f.fl = try self.e.fillBegin(l.seq, ids[0..m], s.sampling, .{ .keep_at = m, .resume_from = f.cur });
++                // PETABRIDGE 0010: an image prompt's segment carries the whole prompt's media (Media.check)
++                f.fl = try self.e.fillBegin(l.seq, ids[0..m], s.sampling, .{ .keep_at = m, .resume_from = f.cur, .media = s.media });
+                 f.final = false;
+             } else {
+                 f.fl = try self.e.fillBegin(l.seq, ids, s.sampling, .{ .resume_from = f.cur, .media = s.media });
+@@ -510,7 +511,8 @@ pub fn Lanes(comptime E: type) type {
+             var parts: [3]f64 = @splat(0); // to the marks, keeping, the rest
+             for (s.reuse.marks) |m| {
+                 if (m <= at or m >= ids.len) continue;
+-                const r = try e.prefillWith(ids[0..m], s.sampling, .{ .keep_at = m, .resume_from = cur });
++                // PETABRIDGE 0010: an image prompt's segment carries the whole prompt's media (Media.check)
++                const r = try e.prefillWith(ids[0..m], s.sampling, .{ .keep_at = m, .resume_from = cur, .media = s.media });
+                 if (times) parts[0] += passSince(e, &t_last);
+                 if (owned) e.freeSnapshot(cur.?);
+                 cur = r.kept.?;
+diff --git a/zig/src/server/chat.zig b/zig/src/server/chat.zig
+index 81b63c1..ce67aef 100644
+--- a/zig/src/server/chat.zig
++++ b/zig/src/server/chat.zig
+@@ -182,6 +182,9 @@ pub fn prepare(srv: *Server, cx: *Cx, input: Input, gone: anytype) Failure!Prepa
+         .chunks = try srv.chunks.starts(a, rendered.ids),
+         .tools_json = if (input.tools.len > 0) try json.stringify(a, .{ .array = @constCast(input.tools) }, .{ .ascii = false }) else "",
+         .media = rendered.media,
++        .cache_key = rendered.cache_key, // PETABRIDGE 0010
++        // PETABRIDGE 0010: "prompt_cache": false prefills from 0 and keeps nothing (an exactness run's fresh pass)
++        .prompt_cache = if (f.get("prompt_cache")) |v| !(v == .bool and !v.bool) else true,
+     };
+     try srv.checkFeatures(cx, f, input.tools.len > 0, thinking, rendered.ids, input.tools, &request);
+     if (thinking) {
+diff --git a/zig/src/server/openai.zig b/zig/src/server/openai.zig
+index 123b116..e3437d7 100644
+--- a/zig/src/server/openai.zig
++++ b/zig/src/server/openai.zig
+@@ -143,7 +143,7 @@ fn plan(srv: *Server, cx: *Cx, is_chat: bool, raw: Value) errors.Refused!Plan {
+         input.temperature = if (t == .float) t.float else std.fmt.parseFloat(f64, t.int) catch 0;
+     };
+     const sampling = try json.newObject(cx.a);
+-    for ([_][]const u8{ "temperature", "top_p", "top_k", "min_p", "seed", "priority", "draft", "thinking_budget", "ignore_eos", "stop" } ++ grammar.fields) |k| if (body.get(k)) |v| try sampling.put(cx.a, k, v);
++    for ([_][]const u8{ "temperature", "top_p", "top_k", "min_p", "seed", "priority", "draft", "thinking_budget", "ignore_eos", "stop", "prompt_cache" } ++ grammar.fields) |k| if (body.get(k)) |v| try sampling.put(cx.a, k, v); // PETABRIDGE 0010: prompt_cache
+     try grammar.refusal(cx, body);
+     if (input.tools.len > 0 and try tool_specs.choiceRequiresCall(cx.a, body.get("tool_choice"))) try sampling.put(cx.a, "tool_call_required", .{ .bool = true });
+     const thinking = try fields.thinkingFields(cx, body, srv.effort_levels);
+diff --git a/zig/src/server/prompt.zig b/zig/src/server/prompt.zig
+index 65a8a39..2008448 100644
+--- a/zig/src/server/prompt.zig
++++ b/zig/src/server/prompt.zig
+@@ -12,7 +12,8 @@ const log = @import("log.zig");
+ const Value = json.Value;
+ const Cx = errors.Cx;
+ 
+-pub const Rendered = struct { ids: []const u32, history_len: usize = 0, media: ?*const api.Media = null };
++/// PETABRIDGE 0010: ``cache_key``, an image prompt's ids with its pictures' keys in their rows (the prompt cache's).
++pub const Rendered = struct { ids: []const u32, history_len: usize = 0, media: ?*const api.Media = null, cache_key: ?[]const u32 = null };
+ 
+ pub const isTitle = messages_mod.isTitleRequest;
+ 
+@@ -63,7 +64,8 @@ pub fn prepare(srv: *Server, cx: *Cx, input: chat.Input, thinking: bool, effort:
+ 
+ /// ``prepare_images``: the messages split (image_url / video_url parts as the template's image / video parts, the
+ /// media in order), normalized with their parts, rendered, then the vision helper's processor and tower: Python's
+-/// token ids and the media the engine takes. Such a prompt is neither kept nor resumed.
++/// token ids and the media the engine takes. PETABRIDGE 0010: such a prompt is kept and resumed by its cache key (its
++/// pictures' content keys in their rows), with its history found as the text path finds it.
+ fn prepareMedia(srv: *Server, cx: *Cx, raw: Value, tools: []const Value, thinking: bool, effort: ?[]const u8) errors.Refused!Rendered {
+     const helper = srv.vision orelse return cx.refuse("image input requires a supported vision checkpoint served with --vision");
+     if (!srv.info.media) return cx.refuse("image input requires a supported vision checkpoint served with --vision");
+@@ -93,8 +95,11 @@ fn prepareMedia(srv: *Server, cx: *Cx, raw: Value, tools: []const Value, thinkin
+             return cx.fail(if (r.status == 503) .capacity else .request, "{s}", .{r.message});
+         },
+         .ok => |p| {
+-            log.line("vision: {d} image(s), {d} video(s): {d} visual tokens of {d} prompt tokens (prepare {d:.3}s, tower {d:.3}s, helper GPU peak {d:.2} GiB, features {s})", .{ p.images, p.videos, p.visual_tokens, p.tokens.len, p.prepare_s, p.encode_s, @as(f64, @floatFromInt(p.peak)) / (1 << 30), if (p.features_sha.len >= 16) p.features_sha[0..16] else p.features_sha });
+-            return .{ .ids = p.tokens, .media = p.media };
++            // PETABRIDGE 0010: the history (the prompt without the template's generation suffix) and the cache key
++            const history_len = mediaHistoryLen(srv, cx, normalized, options, text, p.tokens);
++            const cache_key: ?[]const u32 = if (p.spans.len > 0) api.prompt_cache.mediaKeyed(cx.a, p.tokens, p.spans) catch null else null;
++            log.line("vision: {d} image(s), {d} video(s): {d} visual tokens of {d} prompt tokens (prepare {d:.3}s, tower {d:.3}s, helper GPU peak {d:.2} GiB, features {s}; {d} picture(s) keyed, {d} from the feature cache, fixed cap {s}, history {d})", .{ p.images, p.videos, p.visual_tokens, p.tokens.len, p.prepare_s, p.encode_s, @as(f64, @floatFromInt(p.peak)) / (1 << 30), if (p.features_sha.len >= 16) p.features_sha[0..16] else p.features_sha, p.spans.len, p.feature_hits, if (p.fixed_cap) "yes" else "no", history_len });
++            return .{ .ids = p.tokens, .media = p.media, .history_len = history_len, .cache_key = cache_key };
+         },
+     }
+ }
+@@ -118,3 +123,15 @@ pub fn systemPrefixLen(srv: *Server, cx: *Cx, messages: Value, tools: []const Va
+     while (shared < @min(prompt_ids.len, other.len) and prompt_ids[shared] == other[shared]) shared += 1;
+     return if (shared >= 512) shared else 0;
+ }
++
++/// PETABRIDGE 0010: an image prompt's history length: the template rendered without its generation prompt must be
++/// a prefix of the rendered prompt, and the helper's ids must end with the rest's ids (vision.historyLen); else 0.
++fn mediaHistoryLen(srv: *Server, cx: *Cx, normalized: Value, options: model_text.RenderOptions, text: []const u8, tokens: []const u32) usize {
++    var history_options = options;
++    history_options.add_generation_prompt = false;
++    var problem: []const u8 = "";
++    const history = srv.text.render(cx.a, normalized, history_options, &problem) catch return 0;
++    if (history.len > text.len or !std.mem.startsWith(u8, text, history)) return 0;
++    const suffix_ids = srv.text.encode(cx.a, text[history.len..], false) catch return 0;
++    return vision.historyLen(tokens, suffix_ids);
++}
+diff --git a/zig/src/server/root.zig b/zig/src/server/root.zig
+index 6942e7a..5599160 100644
+--- a/zig/src/server/root.zig
++++ b/zig/src/server/root.zig
+@@ -35,5 +35,6 @@ test {
+     _ = @import("status_routes.zig");
+     _ = @import("log.zig");
+     _ = @import("messages.zig");
++    _ = @import("vision.zig"); // PETABRIDGE 0010
+     _ = @import("stream_preflight_test.zig");
+ }
+diff --git a/zig/src/server/vision.zig b/zig/src/server/vision.zig
+index 49ec1d4..5252b01 100644
+--- a/zig/src/server/vision.zig
++++ b/zig/src/server/vision.zig
+@@ -31,8 +31,51 @@ pub const Prepared = struct {
+     features_sha: []const u8,
+     /// the helper's torch reservation peak during the request (bytes)
+     peak: u64 = 0,
++    /// PETABRIDGE 0010: each picture's and video frame group's rows and content key (empty: the helper keyed none;
++    /// such a prompt is neither kept nor resumed), whether its images ran under the fixed per-image cap, and how many
++    /// pictures' tower rows came from the helper's feature cache
++    spans: []const api.prompt_cache.MediaSpan = &.{},
++    fixed_cap: bool = false,
++    feature_hits: u32 = 0,
+ };
+ 
++/// PETABRIDGE 0010: the helper's ``item_keys`` ([[start, end, "16 hex"], ...], ascending) as spans, checked against
++/// the media's feature rows: together the spans must hold exactly those rows. Anything else: none (no prompt reuse
++/// for the request, never a wrong one).
++pub fn parseSpans(a: Allocator, v: ?Value, rows: []const u32, prompt_len: usize) []const api.prompt_cache.MediaSpan {
++    const list = (v orelse return &.{}).items() orelse return &.{};
++    if (list.len == 0) return &.{};
++    const out = a.alloc(api.prompt_cache.MediaSpan, list.len) catch return &.{};
++    var at: usize = 0; // the next feature row the spans must cover
++    var last: u32 = 0;
++    for (list, out) |item, *o| {
++        const f = item.items() orelse return &.{};
++        if (f.len != 3) return &.{};
++        const start = std.math.cast(u32, f[0].int64() orelse return &.{}) orelse return &.{};
++        const end = std.math.cast(u32, f[1].int64() orelse return &.{}) orelse return &.{};
++        const hex = f[2].str() orelse return &.{};
++        if (hex.len != 16 or start < last or end <= start or end > prompt_len) return &.{};
++        const key = std.fmt.parseInt(u64, hex, 16) catch return &.{};
++        for (start..end) |r| {
++            if (at >= rows.len or rows[at] != r) return &.{};
++            at += 1;
++        }
++        o.* = .{ .start = start, .end = end, .key = key };
++        last = end;
++    }
++    if (at != rows.len) return &.{};
++    return out;
++}
++
++/// PETABRIDGE 0010: an image prompt's history length, as the text path finds it: the prompt's ids end with the
++/// template's generation suffix's ids (the rendered prompt past the rendered history); none: 0 (no history mark).
++pub fn historyLen(tokens: []const u32, suffix: ?[]const u32) usize {
++    const sfx = suffix orelse return 0;
++    if (sfx.len == 0) return if (tokens.len > 1) tokens.len - 1 else 0; // a template with no generation suffix
++    if (sfx.len >= tokens.len or !std.mem.endsWith(u32, tokens, sfx)) return 0;
++    return tokens.len - sfx.len;
++}
++
+ pub const Refusal = struct { status: u16, message: []const u8, context: bool = false };
+ 
+ pub const Result = union(enum) { ok: Prepared, refused: Refusal };
+@@ -315,11 +358,47 @@ pub const Helper = struct {
+         const media = try a.create(api.Media);
+         media.* = .{ .rows = rows, .positions = positions, .delta = delta, .features = frame.payload[at..][0..sizes[3]], .width = @intCast(width) };
+         media.check(n) catch return error.VisionFrame;
++        const spans = parseSpans(a, head.get("item_keys"), rows, n);
+         const count = struct {
+             fn of(v: Value, key: []const u8) u32 {
+                 return @intCast(if (v.get(key)) |x| x.int64() orelse 0 else 0);
+             }
+         };
+-        return .{ .ok = .{ .tokens = tokens, .media = media, .images = count.of(head, "images"), .videos = count.of(head, "videos"), .visual_tokens = count.of(head, "visual_tokens"), .prepare_s = if (head.get("prepare_s")) |x| x.float64() orelse 0 else 0, .encode_s = if (head.get("encode_s")) |x| x.float64() orelse 0 else 0, .features_sha = head.strField("features_sha256") orelse "", .peak = @intCast(@max(0, if (head.get("peak")) |x| x.int64() orelse 0 else 0)) } };
++        return .{ .ok = .{ .tokens = tokens, .media = media, .images = count.of(head, "images"), .videos = count.of(head, "videos"), .visual_tokens = count.of(head, "visual_tokens"), .prepare_s = if (head.get("prepare_s")) |x| x.float64() orelse 0 else 0, .encode_s = if (head.get("encode_s")) |x| x.float64() orelse 0 else 0, .features_sha = head.strField("features_sha256") orelse "", .peak = @intCast(@max(0, if (head.get("peak")) |x| x.int64() orelse 0 else 0)), .spans = spans, .fixed_cap = if (head.get("fixed_cap")) |x| x == .bool and x.bool else false, .feature_hits = count.of(head, "feature_hits") } };
+     }
+ };
++
++test "PETABRIDGE 0010: item keys become spans only when they cover exactly the feature rows" {
++    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
++    defer arena.deinit();
++    const a = arena.allocator();
++    const parse = struct {
++        fn of(al: Allocator, text: []const u8) !Value {
++            return switch (try json.parse(al, text)) {
++                .ok => |v| v,
++                .err => error.BadJson,
++            };
++        }
++    }.of;
++    const rows = [_]u32{ 2, 3, 4, 7, 8 };
++    const ok = parseSpans(a, try parse(a, "[[2,5,\"00000000000000aa\"],[7,9,\"ffffffffffffffff\"]]"), &rows, 10);
++    try std.testing.expectEqual(@as(usize, 2), ok.len);
++    try std.testing.expectEqual(@as(u64, 0xaa), ok[0].key);
++    try std.testing.expectEqual(@as(u32, 7), ok[1].start);
++    try std.testing.expectEqual(@as(u64, 0xffffffffffffffff), ok[1].key);
++    // a span that misses a feature row, a row past the prompt, a short key, overlapping spans, none at all
++    try std.testing.expectEqual(@as(usize, 0), parseSpans(a, try parse(a, "[[2,5,\"00000000000000aa\"]]"), &rows, 10).len);
++    try std.testing.expectEqual(@as(usize, 0), parseSpans(a, try parse(a, "[[2,5,\"00000000000000aa\"],[7,11,\"00000000000000bb\"]]"), &rows, 10).len);
++    try std.testing.expectEqual(@as(usize, 0), parseSpans(a, try parse(a, "[[2,5,\"aa\"],[7,9,\"00000000000000bb\"]]"), &rows, 10).len);
++    try std.testing.expectEqual(@as(usize, 0), parseSpans(a, try parse(a, "[[2,5,\"00000000000000aa\"],[4,9,\"00000000000000bb\"]]"), &rows, 10).len);
++    try std.testing.expectEqual(@as(usize, 0), parseSpans(a, null, &rows, 10).len);
++}
++
++test "PETABRIDGE 0010: an image prompt's history ends where the generation suffix's ids begin" {
++    const tokens = [_]u32{ 1, 2, 3, 4, 90, 91 };
++    try std.testing.expectEqual(@as(usize, 4), historyLen(&tokens, &.{ 90, 91 }));
++    try std.testing.expectEqual(@as(usize, 5), historyLen(&tokens, &.{})); // no generation suffix
++    try std.testing.expectEqual(@as(usize, 0), historyLen(&tokens, &.{ 90, 92 })); // the suffix tokenized otherwise
++    try std.testing.expectEqual(@as(usize, 0), historyLen(&tokens, null));
++    try std.testing.expectEqual(@as(usize, 0), historyLen(&tokens, &tokens));
++}

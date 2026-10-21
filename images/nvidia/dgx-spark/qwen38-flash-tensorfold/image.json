@@ -1,0 +1,14 @@
+{
+  "$schema": "../../../../schemas/image.schema.json",
+  "schema_version": 1,
+  "id": "tensorfold-qwen3-8-flash-gb10",
+  "description": "Qwen3.8-Flash-Next NVFP4 TensorFold Zig engine (MiaAI-Lab recipe) for two NVIDIA DGX Sparks, with Petabridge's image prompt reuse patch",
+  "vendor": "nvidia",
+  "hardware_family": "dgx-spark",
+  "platform": "linux/arm64",
+  "registry_repository": "petabridge/tensorfold-qwen3-8-flash-gb10",
+  "build_enabled": false,
+  "disabled_reason": "Prototype, unqualified: the 0010 media prompt reuse patch has passed host-side tests only. Enable after a GPU build and the README's exactness and reuse test plan pass on two DGX Sparks.",
+  "context": "images/nvidia/dgx-spark/qwen38-flash-tensorfold",
+  "dockerfile": "images/nvidia/dgx-spark/qwen38-flash-tensorfold/Dockerfile"
+}

@@ -1,0 +1,111 @@
+--- upstream/Dockerfile	(the inline heredoc in recipe/scripts/prepare.sh lines 175-220 @ be3ed857ab1055ca47b36134d22691f00f2bb94a)
++++ Dockerfile
+@@ -1,17 +1,42 @@
+-ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.07-py3
+-FROM ${BASE_IMAGE} AS build
+-ARG ZIG_VERSION
+-ARG ZIG_SHA256
++# Qwen3.8-Flash-Next NVFP4 on TensorFold's Zig engine (tensorfold-native) for two NVIDIA DGX Sparks (GB10,
++# sm_121), with Petabridge's 0010-media-prompt-reuse patch. PROTOTYPE: image.json has build_enabled false.
++#
++# Materialized by Petabridge from the upstream recipe's inline Dockerfile:
++# MiaAI-Lab/Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold, recipe/scripts/prepare.sh, the
++# `docker build ... -f - "$ctx"` heredoc (lines 175-220), at commit
++# be3ed857ab1055ca47b36134d22691f00f2bb94a. The heredoc is not a file upstream, so this is a
++# materialization, not a copy: every change against it is marked "PETABRIDGE:" below and is
++# recorded in ./petabridge-dockerfile.diff. See ./README.md and ./dependency.lock.json.
++#
++# The build context is this folder (image.json -> context): the vendored recipe/ and
++# petabridge-patches/ both have to reach the build.
++
++# PETABRIDGE: literal digest-pinned base image (the linux/arm64 manifest of
++# nvcr.io/nvidia/pytorch:26.07-py3, resolvable anonymously). Upstream: `ARG BASE_IMAGE=...`
++# followed by `FROM ${BASE_IMAGE} AS build`; this repository prohibits base-image build arguments.
++FROM nvcr.io/nvidia/pytorch:26.07-py3@sha256:7531d90bcbe0e43e1f7363029c7e145ce90eebeb494a7b4695fdba0329d7c3c3 AS build
++# PETABRIDGE: upstream took these as build arguments passed by recipe/scripts/prepare.sh from
++# recipe/scripts/config.sh; scripts/build-image.sh passes only the arguments declared in
++# image.json, so config.sh's values at the pinned commit are materialized as defaults.
++ARG ZIG_VERSION=0.17.0
++ARG ZIG_SHA256=9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8
+ RUN curl -fsSL -o /tmp/zig.tar.xz "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-linux-${ZIG_VERSION}.tar.xz" && \
+     echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c - && \
+     mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 && rm /tmp/zig.tar.xz && \
+     /opt/zig/zig version
+-ARG TF_REPO
+-ARG TF_REF
++# PETABRIDGE: TF_REPO / TF_REF materialized (config.sh). TF_REF is already an immutable commit
++# (branch zig-flashnext), and the checkout below asserts it.
++ARG TF_REPO=https://github.com/ashhart/TensorFold.git
++ARG TF_REF=db281878ddb836fd0df510d8771ecb7e0fe47d26
+ RUN git init -q /tensorfold && cd /tensorfold && git remote add origin "${TF_REPO}" && \
+     git fetch -q --depth 1 origin "${TF_REF}" && git checkout -q --detach FETCH_HEAD && \
+     test "$(git rev-parse HEAD)" = "${TF_REF}"
+-COPY patches /opt/tf-patches
++# PETABRIDGE: upstream `COPY patches /opt/tf-patches` with a build context of the recipe's patches/
++# only. Here the context is this folder: the recipe's 0001-0009, then Petabridge's 0010 (kept
++# outside the vendored recipe), into one directory; the loop below applies them in filename
++# order, unchanged.
++COPY recipe/patches/ /opt/tf-patches/
++COPY petabridge-patches/ /opt/tf-patches/
+ RUN cd /tensorfold && \
+     for p in /opt/tf-patches/*.patch; do [ -e "$p" ] || continue; echo "applying $p"; git apply --check "$p" && git apply "$p" || exit 1; done
+ RUN cd /tensorfold && /opt/zig/zig build -Dnvcc=/usr/local/cuda/bin/nvcc -Doptimize=fast --prefix /opt/tensorfold \
+@@ -22,7 +47,9 @@
+       if [ -e "$f" ]; then cp -a "$f" /opt/tensorfold/share/doc/tensorfold/ || exit 1; fi; done
+ # every Triton specialization, compiled for sm_121 without a GPU (byte-equal to the oracle's: the tree is at
+ # /tensorfold, the kernel sources carry the reference build's mtime)
+-ARG KERNEL_SOURCE_MTIME
++# PETABRIDGE: KERNEL_SOURCE_MTIME materialized (config.sh). 0010 changes no kernel source file
++# (none of zig/tests/cuda/flashnext/kernels.json's sources), so the kernel set is upstream's.
++ARG KERNEL_SOURCE_MTIME=1791318675
+ RUN cd /tensorfold && python -B -c 'import json, os, sys; t = int(sys.argv[1]); \
+       [os.utime(os.path.join("src", f), (t, t)) for f in sorted({k["source"]["file"] for k in \
+        json.load(open("zig/tests/cuda/flashnext/kernels.json"))["kernels"]})]' "${KERNEL_SOURCE_MTIME}" && \
+@@ -30,17 +57,43 @@
+       --spec zig/tests/cuda/flashnext/kernels.json --jit zig/tests/cuda/flashnext/jit.json --tp 1,2 \
+       --out /opt/tensorfold/share/tensorfold/cuda/sm121 && \
+     test -f /opt/tensorfold/share/tensorfold/cuda/sm121/aot.json
++# PETABRIDGE: upstream passed the image's hash in as PATCHES_HASH (recipe/scripts/config.sh
++# image_hash(): sha256 over patches/*.patch, the heredoc itself and the build inputs, first 12 hex
++# characters). Nothing passes it here, so it is recorded literally below and verified in this
++# stage, computed exactly as image_hash() would compute it with 0010 placed in recipe/patches/
++# (upstream's own 0001-0009 give f3e1300f4f62, the published image's tag). The label is the key
++# recipe/scripts/prepare.sh and start.sh compare and cache kernels under, so a deployment that
++# adds 0010 to its recipe's patches/ computes the same value.
++COPY recipe/scripts/prepare.sh /tmp/recipe-prepare.sh
++RUN set -eu; \
++    computed="$( { cat /opt/tf-patches/*.patch; \
++                   sed -n "/<<.DOCKERFILE./,/^DOCKERFILE\$/p" /tmp/recipe-prepare.sh; \
++                   echo "${TF_REPO} ${TF_REF} zig-${ZIG_VERSION} ${ZIG_SHA256} nvcr.io/nvidia/pytorch:26.07-py3 kernel-mtime-${KERNEL_SOURCE_MTIME}"; \
++                 } | sha256sum | cut -c1-12 )"; \
++    echo "image hash $computed"; test "$computed" = "50cb44760834"
+ 
+-FROM ${BASE_IMAGE}
++# PETABRIDGE: the same digest-pinned base (upstream `FROM ${BASE_IMAGE}`).
++FROM nvcr.io/nvidia/pytorch:26.07-py3@sha256:7531d90bcbe0e43e1f7363029c7e145ce90eebeb494a7b4695fdba0329d7c3c3
+ COPY --from=build /opt/tensorfold /opt/tensorfold
+ # TensorFold's Python tree for the vision helper (python3 -m tensorfold.vision.native_helper, started by --vision)
+ COPY --from=build /tensorfold/src/tensorfold /opt/tensorfold/python/tensorfold
+ RUN ln -s /opt/tensorfold/native/bin/tensorfold-native /usr/local/bin/tensorfold-native && \
+     pip install --no-cache-dir "huggingface_hub>=1.0" && \
+     pip install --no-cache-dir --no-deps "transformers==5.17.0" "av==19.0.1"
+-ARG PATCHES_HASH
+-ARG KERNELS
+-LABEL tf.patches=${PATCHES_HASH} tf.kernels=${KERNELS}
++# PETABRIDGE: upstream `ARG PATCHES_HASH` / `ARG KERNELS` + `LABEL tf.patches=${PATCHES_HASH}
++# tf.kernels=${KERNELS}`, passed in by prepare.sh (KERNELS is "present" when it builds the kernel
++# set, as this build always does). Recorded literally; the build stage verifies tf.patches.
++LABEL tf.patches="50cb44760834" tf.kernels="present"
+ ENV HF_HOME=/root/.cache/huggingface TENSORFOLD_CUDA_KERNELS=/opt/tensorfold/share/tensorfold/cuda/sm121 \
+     CUDA_CACHE_PATH=/cache/nv TENSORFOLD_VISION_PYTHONPATH=/opt/tensorfold/python
+ WORKDIR /workspace
++
++# PETABRIDGE: provenance labels. Upstream sets none. The recipe and TensorFold are Apache-2.0;
++# see ./attribution/THIRD_PARTY_NOTICES.md.
++LABEL org.opencontainers.image.source="https://github.com/petabridge/netclaw-inference" \
++      org.opencontainers.image.licenses="Apache-2.0" \
++      io.petabridge.upstream.recipe="https://github.com/MiaAI-Lab/Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold" \
++      io.petabridge.upstream.recipe.commit="be3ed857ab1055ca47b36134d22691f00f2bb94a" \
++      io.petabridge.engine="TensorFold (Zig engine, tensorfold-native)" \
++      io.petabridge.engine.commit="db281878ddb836fd0df510d8771ecb7e0fe47d26" \
++      io.petabridge.patches="0001-0009 (recipe), 0010-media-prompt-reuse (Petabridge, prototype)"
