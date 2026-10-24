@@ -16,6 +16,8 @@ Changes:
   (8.5.0-2ubuntu10.16, from the pinned snapshot) in the NCCL and tools stages.
   NVIDIA's CUDA images purge curl after setup, so the first candidate build
   failed at the NCCL download.
+- **Fix a broken line continuation in the DS41F tools stage** that passed a
+  stray `n` to apt (second candidate build).
 - **Add a DeepSeek V4.1 Flash 1017 TensorFold image definition for three DGX Sparks (candidate)**
   - Build LakyFx's DS41F 1.2.5 recipe, build recipe `k2a` (tag `v1.2.5`,
     commit `b4e476d6`), from source in container stages: NCCL `v2.30.7-1`
