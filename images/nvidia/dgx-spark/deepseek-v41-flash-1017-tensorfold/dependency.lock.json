@@ -34,6 +34,7 @@
     "packages": [
       { "name": "python3", "version": "3.12.3-0ubuntu2.1", "stages": ["nccl", "runtime-base (all stages, final)"], "sha256": "ea792b91e0fc9e249b96b960d14e04a8b7107029988546e8dd3511b74a693a6c" },
       { "name": "python3.12", "version": "3.12.3-1ubuntu0.17", "stages": ["nccl", "runtime-base (all stages, final)"], "sha256": "4dcc676815989c3d32ef43f8b98d37ecfd60cff8a47022152120246f21903cf0" },
+      { "name": "curl", "version": "8.5.0-2ubuntu10.16", "stages": ["nccl", "tools"], "sha256": "b3f66040e895d5a2bb9eb3fca5d98766997348080e445c209a29b1819a9a7d60", "note": "NVIDIA CUDA images purge curl after setup; needed for the NCCL and Zig downloads. sha256 from the snapshot noble-updates arm64 index." },
       { "name": "git", "version": "1:2.43.0-1ubuntu7.4", "stages": ["tools"], "sha256": "b46ef5ad7292f8ae69a7ec18c05e5b40f6c1fca837df2ce4b05b05bd46c9dc2b" },
       { "name": "git-man", "version": "1:2.43.0-1ubuntu7.4", "stages": ["tools"], "sha256": "77f57651734edc24b5a9e7863bc261bf302060ac3c12bbb08a459966ea4d30a6" },
       { "name": "xz-utils", "version": "5.6.1+really5.4.5-1ubuntu0.4", "stages": ["tools"], "sha256": "1f7132ef96fa045322084a64693e775e755db3d035cf4681865471020d1004bd" },
