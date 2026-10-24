@@ -72,7 +72,8 @@ RUN --mount=type=bind,source=apt-snapshot-install.sh,target=/tmp/apt-snapshot-in
     bash /tmp/apt-snapshot-install.sh "${UBUNTU_SNAPSHOT}" \
       git=1:2.43.0-1ubuntu7.4 git-man=1:2.43.0-1ubuntu7.4 \
       xz-utils=5.6.1+really5.4.5-1ubuntu0.4 \
-      python3-venv=3.12.3-0ubuntu2.1 python3.12-venv=3.12.3-1ubuntu0.17 \n      curl=8.5.0-2ubuntu10.16
+      python3-venv=3.12.3-0ubuntu2.1 python3.12-venv=3.12.3-1ubuntu0.17 \
+      curl=8.5.0-2ubuntu10.16
 
 # --- upstream recipe, extracted ------------------------------------------------------------------------
 FROM tools AS recipe
