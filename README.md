@@ -21,6 +21,7 @@ runtimes wherever their documented hardware and model requirements fit.
 | --- | --- | --- | --- |
 | [`vllm-deepseek-v4-flash-0731-dspark-gb10`](images/nvidia/dgx-spark/deepseek-v4-flash-0731/README.md) | `linux/arm64` | Two NVIDIA DGX Sparks, TP=2 | Source-build candidate; hardware qualification pending |
 | [`tensorfold-glm-5-3-flash-gb10`](images/nvidia/dgx-spark/glm-53-flash-tensorfold/README.md) | `linux/arm64` | Two NVIDIA DGX Sparks, TP=2 | Vendored MiaAI-Lab TensorFold recipe; hardware qualification pending, base digest outstanding (Apache-2.0 folder, see its README) |
+| [`tensorfold-qwen3-8-flash-gb10`](images/nvidia/dgx-spark/qwen38-flash-tensorfold/README.md) | `linux/arm64` | Two NVIDIA DGX Sparks, TP=2 | Vendored MiaAI-Lab TensorFold recipe plus the Petabridge image prompt reuse patch; hardware qualification pending (GPU test plan outstanding) |
 | [`llama-cpp-rocm-gfx1201-avx2`](images/amd/rocm/llama-cpp-gfx1201-avx2/README.md) | `linux/amd64` | AMD RDNA4 (`gfx1201`) hosts, AVX2 CPU baseline | Source-build candidate; hardware qualification pending |
 
 The DGX Spark image targets `deepseek-ai/DeepSeek-V4-Flash-0731`. Model weights
