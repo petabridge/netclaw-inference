@@ -34,11 +34,12 @@ ARG NCCL_TARBALL_SHA256=292a7f7a27b6754acaf46b5506a60758ca7b18cc1dfbd3d1d4e1e229
 ENV PYTHONDONTWRITEBYTECODE=1
 # NCCL's device-code generator (src/device/generate.py) needs python3, which the devel image lacks. gcc, g++
 # and make are installed only if the devel image turns out not to carry them.
+# PETABRIDGE: NVIDIA's CUDA images purge curl after setup, so it is installed here for the tarball download.
 RUN --mount=type=bind,source=apt-snapshot-install.sh,target=/tmp/apt-snapshot-install.sh \
     set -eux; \
     extra=""; \
     for tool in gcc g++ make; do command -v "$tool" >/dev/null || extra="$extra $tool"; done; \
-    bash /tmp/apt-snapshot-install.sh "${UBUNTU_SNAPSHOT}" python3=3.12.3-0ubuntu2.1 python3.12=3.12.3-1ubuntu0.17 $extra
+    bash /tmp/apt-snapshot-install.sh "${UBUNTU_SNAPSHOT}" python3=3.12.3-0ubuntu2.1 python3.12=3.12.3-1ubuntu0.17 curl=8.5.0-2ubuntu10.16 $extra
 RUN set -eux; \
     mkdir -p /opt/nccl-src /opt/nccl/lib /opt/nccl/share/doc/nccl; \
     curl -fsSL --retry 5 -o /tmp/nccl.tar.gz "https://codeload.github.com/NVIDIA/nccl/tar.gz/refs/tags/${NCCL_TAG}"; \
@@ -66,11 +67,12 @@ RUN --mount=type=bind,source=apt-snapshot-install.sh,target=/tmp/apt-snapshot-in
 # --- build tools --------------------------------------------------------------------------------------
 FROM runtime-base AS tools
 ARG UBUNTU_SNAPSHOT=20261024T000000Z
+# curl: the engine stage downloads Zig (NVIDIA's CUDA images purge curl after setup).
 RUN --mount=type=bind,source=apt-snapshot-install.sh,target=/tmp/apt-snapshot-install.sh \
     bash /tmp/apt-snapshot-install.sh "${UBUNTU_SNAPSHOT}" \
       git=1:2.43.0-1ubuntu7.4 git-man=1:2.43.0-1ubuntu7.4 \
       xz-utils=5.6.1+really5.4.5-1ubuntu0.4 \
-      python3-venv=3.12.3-0ubuntu2.1 python3.12-venv=3.12.3-1ubuntu0.17
+      python3-venv=3.12.3-0ubuntu2.1 python3.12-venv=3.12.3-1ubuntu0.17 \n      curl=8.5.0-2ubuntu10.16
 
 # --- upstream recipe, extracted ------------------------------------------------------------------------
 FROM tools AS recipe
