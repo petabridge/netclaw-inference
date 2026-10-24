@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../schemas/image.schema.json",
+  "schema_version": 1,
+  "id": "tensorfold-deepseek-v4-1-flash-1017-gb10",
+  "description": "DeepSeek V4.1 Flash 1017 on the TensorFold Zig engine (LakyFx DS41F 1.2.5, build recipe k2a) for three NVIDIA DGX Sparks, tensor parallel 3, built from source",
+  "vendor": "nvidia",
+  "hardware_family": "dgx-spark",
+  "platform": "linux/arm64",
+  "registry_repository": "petabridge/tensorfold-deepseek-v4-1-flash-1017-gb10",
+  "build_enabled": true,
+  "context": "images/nvidia/dgx-spark/deepseek-v41-flash-1017-tensorfold",
+  "dockerfile": "images/nvidia/dgx-spark/deepseek-v41-flash-1017-tensorfold/Dockerfile"
+}

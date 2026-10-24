@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "status": "candidate; built from source, not run on GPUs. Nothing here has been built yet.",
+  "base_images": {
+    "nccl_and_toolchain": {
+      "reference": "nvcr.io/nvidia/cuda:13.0.3-devel-ubuntu24.04",
+      "digest": "sha256:2396393dc8a031a6faf810894ec8e40c8d80e2a1177cfda0c2bf81acac9aa240",
+      "platform": "linux/arm64",
+      "index_digest": "sha256:b7ae301dea2c162444795462ce17a05f6a516e5a75944b57af5b88540a1a2266",
+      "dockerfile_stage": "nccl",
+      "role": "Builds NCCL v2.30.7-1 for sm_121 (nvcc 13.0.x). Not in the final image."
+    },
+    "runtime": {
+      "reference": "nvcr.io/nvidia/cuda:13.0.3-runtime-ubuntu24.04",
+      "digest": "sha256:760753ab2971b5c4b5ba8e055334e3c1126c3d88597fc702623eae402257e737",
+      "platform": "linux/arm64",
+      "index_digest": "sha256:76f46f3e649824ebd3685d3d86c42b0ea62af04f59242f419f56cd5804a72efb",
+      "dockerfile_stage": "runtime-base (also the parent of the tools, recipe, engine, ropetools and final stages)",
+      "role": "Final image base, and the base of the CPU-only build stages so they share its layers",
+      "contents_from_image_config": {
+        "CUDA_VERSION": "13.0.3",
+        "NV_LIBCUBLAS_PACKAGE": "libcublas-13-0=13.1.1.3-1 (libcublas.so.13 and libcublasLt.so.13; the engine dlopens both)",
+        "libnccl2": "2.28.3-1+cuda13.0 (apt-held; the final stage removes it so only NCCL 2.30.7 remains)",
+        "NVARCH": "sbsa"
+      }
+    },
+    "digest_note": "Both digests are the linux/arm64 manifests inside the multi-arch indexes of nvcr.io/nvidia/cuda:13.0.3-{devel,runtime}-ubuntu24.04, resolved on 2026-10-24 over the registry HTTP API with an anonymous token (GET https://nvcr.io/proxy_auth?scope=repository:nvidia/cuda:pull, then GET /v2/nvidia/cuda/manifests/<tag> with Accept for the OCI index or Docker manifest list; pick platform linux/arm64). The image configs were read from the manifests' config blobs. Docker could not be run locally, so nothing was built or run."
+  },
+  "ubuntu_apt_snapshot": {
+    "url": "https://snapshot.ubuntu.com/ubuntu/20261024T000000Z",
+    "suites": ["noble", "noble-updates", "noble-security"],
+    "components": ["main", "universe"],
+    "note": "apt-snapshot-install.sh replaces every apt source in a stage with this dated snapshot, so the unpinned dependencies of the packages below resolve identically on every build. The snapshot serves the arm64 indexes and pool; one arm64 .deb (libibverbs1) was downloaded from it and matched the recorded sha256.",
+    "packages": [
+      { "name": "python3", "version": "3.12.3-0ubuntu2.1", "stages": ["nccl", "runtime-base (all stages, final)"], "sha256": "ea792b91e0fc9e249b96b960d14e04a8b7107029988546e8dd3511b74a693a6c" },
+      { "name": "python3.12", "version": "3.12.3-1ubuntu0.17", "stages": ["nccl", "runtime-base (all stages, final)"], "sha256": "4dcc676815989c3d32ef43f8b98d37ecfd60cff8a47022152120246f21903cf0" },
+      { "name": "git", "version": "1:2.43.0-1ubuntu7.4", "stages": ["tools"], "sha256": "b46ef5ad7292f8ae69a7ec18c05e5b40f6c1fca837df2ce4b05b05bd46c9dc2b" },
+      { "name": "git-man", "version": "1:2.43.0-1ubuntu7.4", "stages": ["tools"], "sha256": "77f57651734edc24b5a9e7863bc261bf302060ac3c12bbb08a459966ea4d30a6" },
+      { "name": "xz-utils", "version": "5.6.1+really5.4.5-1ubuntu0.4", "stages": ["tools"], "sha256": "1f7132ef96fa045322084a64693e775e755db3d035cf4681865471020d1004bd" },
+      { "name": "python3-venv", "version": "3.12.3-0ubuntu2.1", "component": "universe", "stages": ["tools"], "sha256": "bc65fb7e4dc802383e21852f00fe1d69745faa5a17b7fbb5dd3b97c0ba738965" },
+      { "name": "python3.12-venv", "version": "3.12.3-1ubuntu0.17", "component": "universe", "stages": ["tools"], "sha256": "269710a10fb900dbb175b99b0fbd7ef52895415aa3a2c17f6c95758425323c67" },
+      { "name": "libibverbs1", "version": "50.0-2ubuntu0.2", "stages": ["final"], "sha256": "20b72b2c6b882ee4c155658be8a0a01d6edc2ee580eaeb330d9bb3ad643f386d", "license": "GPL-2 or BSD-2-Clause (rdma-core)" },
+      { "name": "ibverbs-providers", "version": "50.0-2ubuntu0.2", "stages": ["final"], "sha256": "39e91a145faaa332aad6837783d6b600b7e1b136fa805fb7fc824a87d21897ab", "license": "GPL-2 or BSD-2-Clause (rdma-core)", "note": "Includes the libmlx5 provider for ConnectX-7. Must match the host's mlx5 kernel ABI." }
+    ],
+    "conditional": "The nccl stage installs gcc, g++ and make from the snapshot, unpinned, only if the CUDA devel image does not already carry them (not verified; no container run was possible)."
+  },
+  "upstream_recipe": {
+    "repository": "https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-spark",
+    "tag": "v1.2.5",
+    "tag_object": "7b352157e0c46aded4c9e17da297ccfb0e1c1048",
+    "commit": "b4e476d60f01fda564d760c5906ac1358390c728",
+    "variant": "1.2.5",
+    "build_recipe": "k2a",
+    "license": "MIT (Copyright (c) 2026 LakyFx); does not relicense third-party code or the model",
+    "fetch": "git init, git fetch --depth 1 --filter=blob:none <commit>, git sparse-checkout set --cone tensorfold, checkout; git rev-parse HEAD is asserted equal to the commit and git status must be clean (core.autocrlf=false; upstream binds exact bytes with tensorfold/** -text)",
+    "recipe_file": {
+      "path": "tensorfold/variants/recipes/k2a.json",
+      "git_blob": "c688435a8abe6ce9de3477eec1c4c45ce3c030e7",
+      "bytes": 139074,
+      "sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
+      "note": "This is the launcher's recipe identity (BUILD.json recipe_manifest_sha256). The value ed9c269ab2e5774cdb1869d63471feed84b4a5955b05dbbc9e150d53c970f1c6 quoted in the upstream QUALIFICATION.json (native_manifest_sha256) belongs to the recipe file measured earlier under the alias 1.2.4k2a; the blob at v1.2.5 hashes to the value above (checked from git cat-file, and the GitHub contents API reports the same blob id)."
+    },
+    "k2a_source_tree_sha256": "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade",
+    "shipped_inputs": {
+      "tensorfold/artifacts/tensorfold-source.tar.gz": { "bytes": 2025673, "sha256": "8d4b2f808827fd247048082d122b8fab31b75e798b5ed86fd370103ef178469a" },
+      "tensorfold/artifacts/tensorfold-kernels.tar.gz": { "bytes": 39844643, "sha256": "3e94bac39a953165b05930fc9ef91c905f6238e92640fab3dd984973d761f341" },
+      "tensorfold/artifacts/tensorfold-rope-reference.tar.gz": { "bytes": 1188266, "sha256": "3bb9295bd2809aa0c611082eac3d1e652abee166b804f741473f9010bd3d0405" },
+      "note": "tensorfold/extract.py verifies these against tensorfold/inputs.json before extracting."
+    },
+    "launcher_files_in_image": [
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
+      "tensorfold/launch.py",
+      "tensorfold/prepare_template.py",
+      "tensorfold/cluster.example.json",
+      "tensorfold/profiles/",
+      "tensorfold/templates/",
+      "tensorfold/variants/patch.py",
+      "tensorfold/variants/recipes/k2a.json"
+    ],
+    "destination": "/opt/ds41f/recipe"
+  },
+  "engine": {
+    "name": "TensorFold (Zig engine); frozen fork of ashhart/TensorFold with the dsv41 family, RDMA ring and tf-dsv41-lanes (BertholomusAI), carried in the recipe as tensorfold-source.tar.gz",
+    "license": "Apache-2.0 (earlier code MIT)",
+    "k2a_overlay": "27 files overlaid by tensorfold/variants/recipes/k2a.json; final source tree 1,137 files, verified by sha256 before and after the build",
+    "build_commands": [
+      "python3 tensorfold/extract.py --out /build/ds41f",
+      "python3 tensorfold/variants/build.py build --recipe k2a --build-root /build/ds41f --out /build/built --zig /opt/zig/zig",
+      "python3 tensorfold/variants/build.py install --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5"
+    ],
+    "recorded_upstream_binaries_for_reference": {
+      "tensorfold-native": { "bytes": 23164184, "sha256": "a79dd73d621397c5fd159b797850ef5d4ec8246b10bc89b96e26ffe2ee38dc2c" },
+      "tf-dsv41-lanes": { "bytes": 10607168, "sha256": "ad9d00ca2acf77589a38c1ac1d87808fe130afe8ec7001dec8a3fa097d773335" },
+      "note": "Upstream records that a rebuild can differ and that launch compares only with the local BUILD.json. These are not asserted."
+    },
+    "zig": {
+      "version": "0.17.0",
+      "url": "https://ziglang.org/download/0.17.0/zig-aarch64-linux-0.17.0.tar.xz",
+      "sha256": "9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8",
+      "license": "MIT (Expat)",
+      "note": "Build stage only; not in the final image. Same tarball and hash as the Qwen3.8-Flash TensorFold image."
+    }
+  },
+  "nccl": {
+    "repository": "https://github.com/NVIDIA/nccl",
+    "tag": "v2.30.7-1",
+    "tag_commit": "73cf112295c33aee2b895f329f592f2a9b4b0f97",
+    "tarball": "https://codeload.github.com/NVIDIA/nccl/tar.gz/refs/tags/v2.30.7-1",
+    "tarball_sha256": "292a7f7a27b6754acaf46b5506a60758ca7b18cc1dfbd3d1d4e1e229d0863b4e",
+    "tarball_bytes": 3588381,
+    "sha256_note": "Computed on 2026-10-24 by downloading the tarball twice (identical both times). codeload tarballs are generated by GitHub; if GitHub changes its archive encoding the build fails at sha256sum -c and this value must be recomputed from the tag.",
+    "build": "make -C /opt/nccl-src -j2 src.build CUDA_HOME=/usr/local/cuda NVCC_GENCODE=\"-gencode=arch=compute_121,code=sm_121\" (upstream build/Dockerfile L18-L19); the build asserts NCCL_VERSION_CODE 23007 in nccl.h",
+    "installed_as": "/usr/local/lib/libnccl.so.2.30.7 (+ libnccl.so.2 via ldconfig); libnccl2 2.28.3 from the base image is purged",
+    "license": "Apache-2.0 for most of the project, BSD-3-Clause for parts that keep their original license (LICENSE.txt and ThirdPartyNotices.txt are shipped in /usr/share/doc/nccl)",
+    "provenance_note": "Upstream documents only this source build (vLLM-path Dockerfile) and the requirement 'NCCL 2.30.7'; that K2a production used the same build is inferred."
+  },
+  "rope": {
+    "command": "make_rope.py --reference <extracted reference> --kit /srv/ds41f-tensorfold/kit --pool 10000000",
+    "pool": 10000000,
+    "rows": 10002432,
+    "bytes_per_table": 1280311296,
+    "bytes_total": 5121245184,
+    "sha256": {
+      "rope-plain-cos.f32": "e03f5e3a1f51888ed7c45671f9e10fc6c12091b2076f11299a0ba8b4acc58b00",
+      "rope-plain-sin.f32": "ee17e9620292b35a0cd4afb0500ee41c32fcf121ef6d9139ab0111caf5920fe5",
+      "rope-compressed-cos.f32": "232935aeb2d027d53101a404f6cea701864a33e1193338d4bc892ddde1fdb668",
+      "rope-compressed-sin.f32": "a3f7f728812908d3d73982aa01c417bdfa732d95d819ab38e475f6309b051e37"
+    },
+    "hash_source": "tensorfold/rope-hashes.json['10000000'] at the pinned commit; also embedded in selfcheck.py",
+    "reference_ops_sha256": "a1716efb08b687baa28c932a406e412b1d6809707969858291513588a8edfe4b",
+    "python": "CPython 3.12 (Ubuntu 24.04), venv /opt/rope-venv in the ropetools stage, never copied into the image",
+    "pip": {
+      "lock": "requirements-rope.txt",
+      "mode": "pip install --require-hashes --no-deps --only-binary=:all: --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple",
+      "resolved_with": "pip download --platform manylinux_2_28_aarch64 --python-version 3.12 on 2026-10-24",
+      "packages": [
+        { "name": "torch", "version": "2.13.0+cpu", "license": "BSD-3-Clause" },
+        { "name": "numpy", "version": "2.5.4", "license": "BSD-3-Clause" },
+        { "name": "filelock", "version": "4.2.4" },
+        { "name": "fsspec", "version": "2026.9.0" },
+        { "name": "jinja2", "version": "3.1.6" },
+        { "name": "markupsafe", "version": "3.0.4" },
+        { "name": "mpmath", "version": "1.3.0" },
+        { "name": "networkx", "version": "3.7" },
+        { "name": "setuptools", "version": "84.2.1" },
+        { "name": "sympy", "version": "1.14.0" },
+        { "name": "typing-extensions", "version": "4.16.0" }
+      ],
+      "note": "Upstream qualified torch 2.13.0+cpu and names numpy without a version, so numpy 2.5.4 is Petabridge's choice. The generated tables are asserted byte-identical to the qualified hashes, which is the actual criterion."
+    }
+  },
+  "runtime_models": {
+    "note": "Weights are NOT in the image. They are bind-mounted at /srv/ds41f-tensorfold/weights.",
+    "source_revision": "1bae0e1088993b9b82de08f59de5be5a34e42170",
+    "arm": "TF351-1017",
+    "chat_template_sha256": "7d1356675e429ec4a55cbcc1a6fbeb40615dbeb257aca25b8c3705a42087f33e",
+    "head_chat_template_sha256": "4669c39b5ca71ca4722c52c750883bacfc8f1e2542ef40bddccd8684158e28c8"
+  },
+  "provenance": {
+    "repository": "https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-spark",
+    "commit": "b4e476d60f01fda564d760c5906ac1358390c728"
+  }
+}

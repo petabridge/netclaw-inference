@@ -7,10 +7,31 @@ images. Every release section lists the image ids affected by that release.
 
 Images:
 
+- `tensorfold-deepseek-v4-1-flash-1017-gb10` (candidate; not promotable until GPU qualification passes)
 - `tensorfold-qwen3-8-flash-gb10` (candidate; not promotable until GPU qualification passes)
 
 Changes:
 
+- **Add a DeepSeek V4.1 Flash 1017 TensorFold image definition for three DGX Sparks (candidate)**
+  - Build LakyFx's DS41F 1.2.5 recipe, build recipe `k2a` (tag `v1.2.5`,
+    commit `b4e476d6`), from source in container stages: NCCL `v2.30.7-1`
+    for `sm_121` from a sha256-pinned tarball, the TensorFold Zig engine
+    (`tensorfold-native`, `tf-dsv41-lanes`) with Zig 0.17.0, and the 10M-pool
+    RoPE tables from hash-locked CPU PyTorch 2.13.0, checked against the
+    upstream hashes. The upstream publishes no image for this path.
+  - Digest-pinned `nvcr.io/nvidia/cuda:13.0.3` devel (NCCL stage) and runtime
+    (final image) arm64 bases; Ubuntu packages come from a dated apt snapshot
+    at exact versions; no base-image build arguments.
+  - The final image carries the engine binaries and build receipt, the kernel
+    kit with the RoPE tables, `libcublas.so.13`/`libcublasLt.so.13` from the
+    CUDA base, NCCL 2.30.7 in place of the base image's 2.28.3, libibverbs
+    with the mlx5 provider, and the launcher files under `/opt/ds41f/recipe`
+    (run with `python3 -m tensorfold.launch`). Weights are bind-mounted.
+  - The build checks the library loads, `ncclGetVersion`, the binaries against
+    `BUILD.json`, the RoPE hashes and the launcher import path. The image
+    has not been built or run on GPUs; the build is enabled so a
+    `sha-<commit>` candidate can be qualified on three DGX Sparks, and
+    promotion waits until those tests pass.
 - **Add a Qwen3.8-Flash-Next TensorFold image definition with image prompt reuse (prototype)**
   - Vendor the MiaAI-Lab Qwen3.8-Flash-Dual-DGX-Sparks-TensorFold recipe
     unmodified at commit `be3ed857` (37 files, per-file hash lock), and
