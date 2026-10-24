@@ -55,4 +55,6 @@ if [[ -n "$duplicate_repositories" ]]; then
   exit 1
 fi
 
+"$repo_root/scripts/validate-readme-coverage.sh"
+
 echo "Repository validation passed (${#manifests[@]} image manifest(s))."

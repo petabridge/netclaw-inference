@@ -71,7 +71,7 @@ promotion workflow never rebuilds an image.
 images/
   nvidia/dgx-spark/   ARM64 / GB10 / SM121 images
   amd/rocm/           x64 ROCm images (RDNA4 / gfx1201)
-scripts/              Manifest, source-overlay, and release validation
+scripts/              Manifest, source-overlay, release, and README validation
 .github/workflows/    Public-runner validation, builds, and promotion
 ```
 
