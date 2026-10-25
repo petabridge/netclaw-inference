@@ -1,0 +1,5 @@
+# PETABRIDGE: Pillow for the engine's image decoder child (zig/src/families/dsv41/pil.zig runs
+# `python3` with `from PIL import Image`). Without it the engine refuses every image that is not PNG.
+# 12.3.0 is the version the qualified serving image ran (pil.zig: "the served image's 12.3.0"), so the
+# decoded pixels match it. The manylinux wheel bundles its own libjpeg/libwebp/zlib; no other packages.
+pillow==12.3.0 --hash=sha256:d9c7f76c0673154f044e9d78c8655fb4213f6ca31a836df48b40fe5d187717b9

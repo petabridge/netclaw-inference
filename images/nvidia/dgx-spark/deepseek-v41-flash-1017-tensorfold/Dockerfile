@@ -133,6 +133,17 @@ RUN set -eux; \
       -r /tmp/requirements-rope.txt; \
     /opt/rope-venv/bin/python -c "import torch; assert torch.__version__ == '2.13.0+cpu', torch.__version__"
 
+# --- Pillow for the engine's image decoder (installed into the system python3's dist-packages) -------------
+FROM tools AS pillow
+COPY requirements-pillow.txt /tmp/requirements-pillow.txt
+# PETABRIDGE: the engine decodes non-PNG images through a `python3` child that imports Pillow
+# (dsv41/pil.zig); without it, JPEG/WebP/... are refused ("vision: no Pillow (NoPillow)" at startup).
+# Hash-locked, binary-only, no dependencies; --target keeps it out of any venv.
+RUN set -eux; \
+    python3 -m venv /opt/pip-venv; \
+    /opt/pip-venv/bin/pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: \
+      --target /opt/pillow -r /tmp/requirements-pillow.txt
+
 # --- final image ----------------------------------------------------------------------------------------
 FROM runtime-base AS final
 ARG UBUNTU_SNAPSHOT=20261024T000000Z
@@ -201,6 +212,14 @@ COPY --from=recipe /build/ds41f/source/LICENSES/ /usr/share/doc/ds41f-tensorfold
 COPY --from=recipe /build/ds41f/reference/LICENSE /usr/share/doc/ds41f-tensorfold/rope-reference/LICENSE
 COPY attribution/THIRD_PARTY_NOTICES.md /usr/share/doc/ds41f-tensorfold/THIRD_PARTY_NOTICES.md
 COPY selfcheck.py /opt/ds41f/selfcheck.py
+# Pillow 12.3.0 for the image decoder child; Ubuntu's python3 searches /usr/local/lib/python3.12/dist-packages.
+COPY --from=pillow /opt/pillow/ /usr/local/lib/python3.12/dist-packages/
+RUN python3 -c "import io, PIL; from PIL import Image; \
+    assert PIL.__version__ == '12.3.0', PIL.__version__; \
+    bufs = {f: io.BytesIO() for f in ('JPEG', 'WEBP')}; \
+    [Image.new('RGB', (8, 8), (10, 20, 30)).save(b, f) for f, b in bufs.items()]; \
+    [Image.open(io.BytesIO(b.getvalue())).convert('RGB').load() for b in bufs.values()]; \
+    print('Pillow', PIL.__version__, 'JPEG and WebP encode/decode OK')"
 
 # Build-time checks: dlopen of libcublas.so.13, libcublasLt.so.13, libnccl.so.2 (ncclGetVersion == 23007) and
 # libibverbs.so.1 by soname; BUILD.json against the binaries; the 10M RoPE tables by hash; and the launcher's

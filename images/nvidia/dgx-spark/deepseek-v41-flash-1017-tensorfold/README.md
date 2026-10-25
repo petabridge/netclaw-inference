@@ -29,6 +29,9 @@ does the host-side work once, in container stages, so a rank only needs the weig
 | `/usr/share/doc/ds41f-tensorfold/`, `/usr/share/doc/nccl/` | Licenses and notices, and the build's CPU check logs. |
 
 Not in the image: the weights, the gateway (`ds41f-gateway`), PyTorch, and the Zig toolchain.
+- Pillow 12.3.0 in the system `python3` (`/usr/local/lib/python3.12/dist-packages`), for the engine's image
+  decoder child (`dsv41/pil.zig`). Without it the engine refuses every non-PNG image (`vision: no Pillow`).
+  The version matches the qualified serving image, so decoded pixels match.
 
 ## How the controller runs it
 

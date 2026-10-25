@@ -161,5 +161,15 @@
   "provenance": {
     "repository": "https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-spark",
     "commit": "b4e476d60f01fda564d760c5906ac1358390c728"
+  },
+  "pillow": {
+    "purpose": "The engine's image decoder child (zig/src/families/dsv41/pil.zig runs python3 with `from PIL import Image`). Without it, non-PNG images are refused.",
+    "version": "12.3.0",
+    "why_this_version": "pil.zig: decoded pixels match the qualified serving image's Pillow 12.3.0",
+    "wheel": "pillow-12.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+    "sha256": "d9c7f76c0673154f044e9d78c8655fb4213f6ca31a836df48b40fe5d187717b9",
+    "lock": "requirements-pillow.txt",
+    "install": "pip install --require-hashes --no-deps --only-binary=:all: --target /opt/pillow in the pillow stage, copied to /usr/local/lib/python3.12/dist-packages",
+    "license": "MIT-CMU (Pillow); the wheel's bundled codecs (libjpeg-turbo, libwebp, zlib, ...) under their own licenses"
   }
 }

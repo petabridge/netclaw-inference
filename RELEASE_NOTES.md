@@ -12,6 +12,11 @@ Images:
 
 Changes:
 
+- **Add Pillow 12.3.0 to the DeepSeek V4.1 Flash 1017 image.** The engine decodes non-PNG images
+  through a `python3` child that imports Pillow (`dsv41/pil.zig`); without it the engine logged
+  `vision: no Pillow (NoPillow): images other than PNG are refused` and rejected JPEG/WebP inputs.
+  Pinned to the version the qualified serving image used, installed hash-locked from the manylinux
+  wheel, with a build-time JPEG/WebP encode-decode check.
 - **Fix the DeepSeek V4.1 Flash 1017 candidate build:** install curl
   (8.5.0-2ubuntu10.16, from the pinned snapshot) in the NCCL and tools stages.
   NVIDIA's CUDA images purge curl after setup, so the first candidate build
