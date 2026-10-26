@@ -63,12 +63,12 @@
     },
     "k2a_source_tree_sha256": "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade",
     "k2a_pb1": {
-      "note": "Petabridge's recipe: k2a plus two overlay files, written by pb1/make_recipe.py in the engine stage. Its BUILD.json identity is this recipe file's sha256.",
+      "note": "Petabridge's recipe: k2a plus 31 overlays (k2a's 27 plus the 2 tool_parse files and fake.zig and model.zig as new targets; lane_host.zig, engine.zig, stream.zig and dsv41/lanes.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "9c88fe3563ca0211d871898c88f78b7ebc9b8102e0ee708b43dd9a62c948dce9"
+        "sha256": "b78a1a947f27f5d4c8c74ef9eed41d78cc0570b90bd96607899608ffc37cf0d0"
       },
-      "source_tree_sha256": "a89e785fda51d21ac83e2172d3d5b38f3fce6fa8232267162d590b2b55fdb320",
+      "source_tree_sha256": "a9d29d9972fcb29a3caed1cb91c24e6c05bcd4068f9b7cd33c368c30270e02a8",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -81,14 +81,51 @@
           "file": "pb1/tool_parse_test.zig",
           "sha256": "423ab706642514ce01a54fc9358d3e99d5f8853531be6d9cb8697077d5c2d2c8",
           "replaces_base_sha256": "53e8a544a1604af7f01715148800af0cdcad09874c94f15123cd723fee0c0fa4"
+        },
+        "zig/src/core/lane_host.zig": {
+          "file": "pb1/interleave/lane_host.zig",
+          "sha256": "2591334adac65eea3c81f3a2232b1b1ea4e4817dffcf6759e017fd9f906919a4",
+          "replaces_base_sha256": "63a04d2285d41d23de7179ba66fd1f9943618f78636c679307e4fb6d9d8c185d"
+        },
+        "zig/src/core/lanes/engine.zig": {
+          "file": "pb1/interleave/engine.zig",
+          "sha256": "c419470a733355c56c2b71a63e2f5ec4b035da04b5d5b064f5224eb504c33655",
+          "replaces_base_sha256": "7b6a7b6db774aded6887e33617894511b085f5ce3a2ab16284cc3b05bb7cac29"
+        },
+        "zig/src/core/lanes/stream.zig": {
+          "file": "pb1/interleave/stream.zig",
+          "sha256": "223d9cde7e4bc541eb18e48b5d52b6e589ac35b04d3cb09621b0bb8bcf20e7eb",
+          "replaces_base_sha256": "1eee608d15f66d0844e2d4673ebbab8d979821041d209828e4810ae1278b269e"
+        },
+        "zig/src/core/lanes/fake.zig": {
+          "file": "pb1/interleave/fake.zig",
+          "sha256": "1140838396ef03afd5998bbf30e3ffc1fb3c7e2551b9a6eece65ead34bf0ad66",
+          "replaces_base_sha256": "b4e88c57fcc8f31bbd462320818ce44734be0b93da616ae6105597344a42a302"
+        },
+        "zig/src/families/dsv41/lanes.zig": {
+          "file": "pb1/interleave/dsv41_lanes.zig",
+          "sha256": "98d63599da3cb230d80815a8e2a0c447874eb0f3e32bae3d8334742b04c01a16",
+          "replaces_base_sha256": "00506fc47eeb39b06f414c92be81c2d661d4cc818d5324d4cff7b681e7f9de95"
+        },
+        "zig/src/families/dsv41/model.zig": {
+          "file": "pb1/interleave/dsv41_model.zig",
+          "sha256": "919f0051acab95cb5b49d79a1e30eb8506a9a41a6436a0ce0e7b973f3db2328a",
+          "replaces_base_sha256": "9fbd6a092c2e62661b08a16990a441a4b610c4c789a60b01e78e078b65ca20c2"
         }
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "da1cbf72279cbc12550d145e8472173d77cd974ea5cb7511a76cbc618ab5cf0c"
+        "sha256": "cfaf0c3aa3348f1df454635d7bb26e4b255a7396c49728a42ba33ffde93942d8"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
-      "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67"
+      "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
+      "ported_patches": [
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0005-prefill-interleave.patch",
+          "author": "Coinupbtc",
+          "note": "Prefill interleave; opt-in through TF_DS_PREFILL_INTERLEAVE_MS. lane_host.zig is ported by hand because the patch hunks misapplied onto k2a."
+        }
+      ]
     },
     "shipped_inputs": {
       "tensorfold/artifacts/tensorfold-source.tar.gz": { "bytes": 2025673, "sha256": "8d4b2f808827fd247048082d122b8fab31b75e798b5ed86fd370103ef178469a" },

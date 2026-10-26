@@ -12,6 +12,15 @@ Images:
 
 Changes:
 
+- **Add an opt-in prefill interleave to recipe `k2a-pb1` of the DeepSeek V4.1 Flash 1017 image.**
+  Without it, every prompt pass froze all decoding streams for its full length, at about 2.2K prompt
+  tok/s, so a cold 135K-token prompt froze every reply for about a minute. With
+  `TF_DS_PREFILL_INTERLEAVE_MS` set (the deployment sets it), the head runs decode rounds for the other
+  live streams between the 2,048-row chunks of a prompt pass, for up to that many ms. Unset or 0, the
+  engine is unchanged; prompts with images run whole, and the interleave is off while the core logs a
+  trail. Six overlay files (`pb1/interleave/`) bring `k2a-pb1` to 31 overlays. Ported from MiaAI-Lab's
+  `zig/patches/0005-prefill-interleave.patch` (author Coinupbtc); `lane_host.zig` is ported by hand
+  because the patch's hunks misapplied onto k2a.
 - **Build the DeepSeek V4.1 Flash 1017 image from recipe `k2a-pb1`, which returns tool calls to unoffered
   tools.** Upstream's `k2a` rewrote a DSML invoke naming a tool the request did not offer into the reply
   text, so a streamed reply with no reasoning came back as raw DSML text (`finish_reason=stop`) and one

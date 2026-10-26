@@ -11,7 +11,7 @@ Image id: `tensorfold-deepseek-v4-1-flash-1017-gb10`
 
 A source build of [LakyFx/deepseek-v41-flash-exl3-tp3-spark](https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-spark)
 at tag `v1.2.5` (commit `b4e476d60f01fda564d760c5906ac1358390c728`), variant `1.2.5`, build recipe
-`k2a-pb1` (upstream's `k2a` plus two Petabridge overlay files, see
+`k2a-pb1` (upstream's `k2a` plus Petabridge overlay files, see
 [Petabridge patches](#petabridge-patches-recipe-k2a-pb1)): the TensorFold Zig engine serving DeepSeek V4.1 Flash (`TF351-1017`) with tensor parallel 3, one
 rank per Spark. Upstream ships no image for this path; its docs build and prepare on the host. This image
 does the host-side work once, in container stages, so a rank only needs the weights.
@@ -152,19 +152,27 @@ Do these before any promotion:
 
 ## Petabridge patches (recipe k2a-pb1)
 
-The image builds `k2a-pb1`, upstream's `k2a` plus two overlay files from `pb1/`. They go through upstream's own
+The image builds `k2a-pb1`, upstream's `k2a` plus overlay files from `pb1/`. They go through upstream's own
 `patch.py` and `build.py` unchanged, so the launcher checks `k2a-pb1` the way it checks `k2a`.
 
 | Overlay | Change |
 | --- | --- |
 | `zig/src/server/tool_parse.zig` | A V4.1 DSML invoke naming a tool the request did not offer is returned as a tool call under its written name when calls are unlimited. Upstream rewrote it into the reply text: a streamed reply with no reasoning came back as raw DSML text (`finish_reason=stop`), and one with reasoning lost the call. The one-call policy (`parallel_tool_calls: false`) keeps upstream's behaviour. |
 | `zig/src/server/tool_parse_test.zig` | Upstream's test updated for the new behaviour, plus a block mixing offered and unoffered tools. |
+| `zig/src/core/lane_host.zig` | Between two 2,048-row chunks of a prompt pass, the head runs decode rounds for the other live streams for up to `TF_DS_PREFILL_INTERLEAVE_MS` ms, advancing the adaptive learner's clock as `run()` does. It delivers their tokens and takes their cancels, but leaves the filling job's own cancel for its pass. Ported by hand onto k2a's lane host because the patch's hunks misapplied there. Includes the patch's regression test. |
+| `zig/src/core/lanes/engine.zig` | k2a's file plus `runnableCount`. |
+| `zig/src/core/lanes/stream.zig` | k2a's file plus `Stream.between`. |
+| `zig/src/core/lanes/fake.zig` | Upstream's file plus the fake backend calling between rounds. |
+| `zig/src/families/dsv41/lanes.zig` | k2a's file plus the patch's hunks. The prompt pass offers rounds between chunks, joining the Engram read-ahead first, and the workers re-arm the read-ahead on `fill_chunk`. |
+| `zig/src/families/dsv41/model.zig` | Upstream's file plus the patch's hunks. `fillChunk` keeps a joined read-ahead, and `verify` joins it. |
+
+The prefill interleave is a port of MiaAI-Lab's [`zig/patches/0005-prefill-interleave.patch`](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0005-prefill-interleave.patch) (author Coinupbtc). Without it, every prompt pass froze all decoding streams for its full length, at about 2.2K prompt tok/s, so a cold 135K-token prompt froze every reply for about a minute. With `TF_DS_PREFILL_INTERLEAVE_MS` set, the decoding streams keep getting rounds between the chunks of a prompt pass. It is off by default: unset or 0, the engine is unchanged. Prompts with images run whole, and the interleave is disabled while the core logs a trail.
 
 `pb1/make_recipe.py` runs in the `engine` stage and writes the overlay objects, `variants/recipes/k2a-pb1.json`
-(29 overlays: k2a's 27 plus these two) and `profiles/1.2.5-pb1.json` (profile 1.2.5 with `build_variant: "k2a-pb1"`,
+(31 overlays: k2a has 27; the two `tool_parse` files, `fake.zig` and `model.zig` are new targets, and `lane_host.zig`, `engine.zig`, `stream.zig` and `dsv41/lanes.zig` replace k2a's own overlays of those files) and `profiles/1.2.5-pb1.json` (profile 1.2.5 with `build_variant: "k2a-pb1"`,
 used only by `build.py install`). It refuses to run unless `k2a.json` is the pinned upstream file (`600c83c8...`)
-and both replaced files are still the untouched upstream base files, so a new upstream commit cannot silently
-drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `9c88fe35...`. The image
+and each replaced file is still the one it was written against (upstream's base, or k2a's own overlay), so a new upstream commit cannot silently
+drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `b78a1a94...`. The image
 carries both `recipes/k2a.json` and `recipes/k2a-pb1.json`.
 
 Upstream report: [MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67).
@@ -191,7 +199,7 @@ Deviations from the upstream procedure:
 
 | Change | Why |
 | --- | --- |
-| Builds recipe `k2a-pb1`, not upstream's `k2a`; `pb1/make_recipe.py` writes it in the `engine` stage | `k2a-pb1` is `k2a` plus two overlay files that fix an unoffered-tool-call bug; everything else in `k2a` is unchanged. See [Petabridge patches](#petabridge-patches-recipe-k2a-pb1). |
+| Builds recipe `k2a-pb1`, not upstream's `k2a`; `pb1/make_recipe.py` writes it in the `engine` stage | `k2a-pb1` is `k2a` plus overlays that fix an unoffered-tool-call bug and add an opt-in prefill interleave; everything else in `k2a` is unchanged. See [Petabridge patches](#petabridge-patches-recipe-k2a-pb1). |
 | `make_rope.py` runs in the `final` stage against the copied kit, with the venv and the upstream scripts mounted from other stages | The 5.12 GB of tables is written once, into one layer, instead of being copied between stages (a second copy would put about 5 GB more in the builder's cache). The script reads only `kit/models/TF351/config.json` and writes the four tables and `rope.json`, so the result is the same; the tables are checked against `rope-hashes.json` by the script and again afterwards. |
 | `extract.py` runs once in `recipe`, not inside the engine stage | `build.py` patches only `source/`; the engine and RoPE steps read `kit/` and `reference/` unchanged. |
 | The recipe file is asserted to hash to `600c83c8...`, not `ed9c269a...` | `ed9c269a...` is the earlier file measured as `1.2.4k2a`. The blob at `v1.2.5` hashes to `600c83c8...` and is what `BUILD.json` binds. See `dependency.lock.json`. |
