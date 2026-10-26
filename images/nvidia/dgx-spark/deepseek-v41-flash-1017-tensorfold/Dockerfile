@@ -1,4 +1,5 @@
-# DeepSeek V4.1 Flash 1017 on TensorFold's Zig engine (variant 1.2.5, build recipe k2a) for three NVIDIA
+# DeepSeek V4.1 Flash 1017 on TensorFold's Zig engine (variant 1.2.5, build recipe k2a-pb1: upstream's k2a plus
+# the Petabridge overlays in ./pb1/) for three NVIDIA
 # DGX Sparks (GB10, sm_121), tensor parallel 3. CANDIDATE: built from source, not yet GPU-qualified.
 #
 # Upstream: LakyFx/deepseek-v41-flash-exl3-tp3-spark, tag v1.2.5, commit
@@ -15,7 +16,8 @@
 #   nccl       NVIDIA CUDA 13.0.3 devel: NCCL v2.30.7-1 from source for sm_121
 #   tools      CUDA 13.0.3 runtime base + git/xz/venv: shared by the stages below
 #   recipe     the upstream repo at the pinned commit; extract.py unpacks source/, kit/, reference/
-#   engine     Zig 0.17.0: build.py build + install -> tensorfold-native, tf-dsv41-lanes, BUILD.json
+#   engine     Zig 0.17.0: pb1/make_recipe.py, then build.py build + install -> tensorfold-native, tf-dsv41-lanes,
+#              BUILD.json
 #   ropetools  hash-locked CPU PyTorch 2.13.0 + numpy venv (never copied into the image)
 #   final      CUDA 13.0.3 runtime base + everything the three ranks need; weights are bind-mounted
 
@@ -112,14 +114,25 @@ RUN set -eux; \
     tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
     rm /tmp/zig.tar.xz; \
     /opt/zig/zig version
-# build: applies the k2a overlay to source/, runs the CPU checks (zig build test, four zig test runs), builds
+# PETABRIDGE: recipe k2a-pb1 is upstream's k2a plus the overlay files in ./pb1/. make_recipe.py writes their
+# objects, recipes/k2a-pb1.json and profiles/1.2.5-pb1.json into the recipe tree, and refuses to run unless k2a.json
+# and each replaced base file are the pinned upstream ones. build.py, patch.py and launch.py then check k2a-pb1
+# exactly as they check k2a. The overlay: a V4.1 DSML call to a tool the request did not offer is returned as a
+# tool call instead of the reply's text (pb1/tool_parse.zig; upstream report MiaAI-Lab/DeepSeek-v4.1-Flash-1017-
+# 2x-DGX-Sparks#67). The hash below is the recipe file make_recipe.py writes from those inputs.
+COPY pb1/ /src/pb1/
+RUN set -eux; \
+    python3 /src/pb1/make_recipe.py --recipe-root /src/recipe; \
+    echo "9c88fe3563ca0211d871898c88f78b7ebc9b8102e0ee708b43dd9a62c948dce9  /src/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
+# build: applies the k2a-pb1 overlays to source/, runs the CPU checks (zig build test, four zig test runs), builds
 # native + dsv41-tools for aarch64-linux-gnu with the prebuilt kit fatbins, and writes BUILD.json. No network.
-RUN cd /src/recipe && python3 tensorfold/variants/build.py build --recipe k2a \
+RUN cd /src/recipe && python3 tensorfold/variants/build.py build --recipe k2a-pb1 \
       --build-root /build/ds41f --out /build/built --zig /opt/zig/zig
 # install: re-verifies BUILD.json against the recipe and copies the two binaries and BUILD.json to
-# <runtime>/bin-1.2.5 (profile 1.2.5 binary_subdir). The binaries are not stripped or touched afterwards.
+# <runtime>/bin-1.2.5 (profile 1.2.5-pb1: profile 1.2.5 with build_variant k2a-pb1, same binary_subdir). The
+# binaries are not stripped or touched afterwards.
 RUN cd /src/recipe && python3 tensorfold/variants/build.py install \
-      --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5 && \
+      --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5-pb1 && \
     ls -l /srv/ds41f-tensorfold/bin-1.2.5
 
 # --- RoPE generator (build-time only) ---------------------------------------------------------------------
@@ -179,7 +192,8 @@ COPY --from=engine /build/built/build-*.log /usr/share/doc/ds41f-tensorfold/buil
 COPY --from=recipe /build/ds41f/kit/ /srv/ds41f-tensorfold/kit/
 
 # Upstream files the launcher needs at runtime, with their relative paths (spec: tensorfold/launch.py,
-# profiles/, variants/patch.py, variants/recipes/k2a.json, templates/, prepare_template.py), plus
+# profiles/, variants/patch.py, variants/recipes/k2a.json, templates/, prepare_template.py), plus Petabridge's
+# variants/recipes/k2a-pb1.json from the engine stage, plus
 # cluster.example.json for reference and the recipe's license files. variants/objects/ and artifacts/ are
 # build-time only and are not copied. No __init__.py exists upstream: run `python3 -m tensorfold.launch`
 # from /opt/ds41f/recipe (the WORKDIR), never `python3 .../launch.py` as upstream's tp3@.service does.
@@ -191,6 +205,9 @@ COPY --from=recipe /src/recipe/tensorfold/variants/patch.py /opt/ds41f/recipe/te
 COPY --from=recipe /src/recipe/tensorfold/variants/recipes/k2a.json /opt/ds41f/recipe/tensorfold/variants/recipes/k2a.json
 # The recipe file the launcher compares with BUILD.json: the blob at the pinned commit (git c688435a...).
 RUN echo "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc  /opt/ds41f/recipe/tensorfold/variants/recipes/k2a.json" | sha256sum -c -
+# PETABRIDGE: the recipe this image's BUILD.json names (profiles with build_variant k2a-pb1 select it).
+COPY --from=engine /src/recipe/tensorfold/variants/recipes/k2a-pb1.json /opt/ds41f/recipe/tensorfold/variants/recipes/k2a-pb1.json
+RUN echo "9c88fe3563ca0211d871898c88f78b7ebc9b8102e0ee708b43dd9a62c948dce9  /opt/ds41f/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
 
 # RoPE tables for the 10M-position pool, generated on the CPU straight into the kit (5,121,245,184 bytes in
 # four files plus a rewritten rope.json). PETABRIDGE: upstream runs make_rope.py against the extracted kit/;
@@ -239,6 +256,8 @@ LABEL org.opencontainers.image.source="https://github.com/petabridge/netclaw-inf
       io.petabridge.upstream.recipe.variant="1.2.5" \
       io.petabridge.upstream.recipe.build="k2a" \
       io.petabridge.upstream.recipe.manifest.sha256="600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc" \
+      io.petabridge.recipe.build="k2a-pb1" \
+      io.petabridge.recipe.manifest.sha256="9c88fe3563ca0211d871898c88f78b7ebc9b8102e0ee708b43dd9a62c948dce9" \
       io.petabridge.engine="TensorFold (Zig engine: tensorfold-native, tf-dsv41-lanes), frozen fork shipped in the recipe" \
       io.petabridge.engine.source.sha256="8d4b2f808827fd247048082d122b8fab31b75e798b5ed86fd370103ef178469a" \
       io.petabridge.nccl.version="2.30.7-1" \

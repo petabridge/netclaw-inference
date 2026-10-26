@@ -51,7 +51,7 @@
     "tag_object": "7b352157e0c46aded4c9e17da297ccfb0e1c1048",
     "commit": "b4e476d60f01fda564d760c5906ac1358390c728",
     "variant": "1.2.5",
-    "build_recipe": "k2a",
+    "build_recipe": "k2a-pb1",
     "license": "MIT (Copyright (c) 2026 LakyFx); does not relicense third-party code or the model",
     "fetch": "git init, git fetch --depth 1 --filter=blob:none <commit>, git sparse-checkout set --cone tensorfold, checkout; git rev-parse HEAD is asserted equal to the commit and git status must be clean (core.autocrlf=false; upstream binds exact bytes with tensorfold/** -text)",
     "recipe_file": {
@@ -62,6 +62,34 @@
       "note": "This is the launcher's recipe identity (BUILD.json recipe_manifest_sha256). The value ed9c269ab2e5774cdb1869d63471feed84b4a5955b05dbbc9e150d53c970f1c6 quoted in the upstream QUALIFICATION.json (native_manifest_sha256) belongs to the recipe file measured earlier under the alias 1.2.4k2a; the blob at v1.2.5 hashes to the value above (checked from git cat-file, and the GitHub contents API reports the same blob id)."
     },
     "k2a_source_tree_sha256": "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade",
+    "k2a_pb1": {
+      "note": "Petabridge's recipe: k2a plus two overlay files, written by pb1/make_recipe.py in the engine stage. Its BUILD.json identity is this recipe file's sha256.",
+      "recipe_file": {
+        "path": "tensorfold/variants/recipes/k2a-pb1.json",
+        "sha256": "9c88fe3563ca0211d871898c88f78b7ebc9b8102e0ee708b43dd9a62c948dce9"
+      },
+      "source_tree_sha256": "a89e785fda51d21ac83e2172d3d5b38f3fce6fa8232267162d590b2b55fdb320",
+      "base_recipe": "k2a",
+      "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
+      "overlays": {
+        "zig/src/server/tool_parse.zig": {
+          "file": "pb1/tool_parse.zig",
+          "sha256": "18ce473e908cc71810af3c6b93abb0c7b72ec5ea857a6543ef405794cb01983b",
+          "replaces_base_sha256": "211918aed38ccbf5081f9427374d2a33c7e5b903a1481ebd8859950e8a3b5bb0"
+        },
+        "zig/src/server/tool_parse_test.zig": {
+          "file": "pb1/tool_parse_test.zig",
+          "sha256": "423ab706642514ce01a54fc9358d3e99d5f8853531be6d9cb8697077d5c2d2c8",
+          "replaces_base_sha256": "53e8a544a1604af7f01715148800af0cdcad09874c94f15123cd723fee0c0fa4"
+        }
+      },
+      "make_recipe": {
+        "file": "pb1/make_recipe.py",
+        "sha256": "da1cbf72279cbc12550d145e8472173d77cd974ea5cb7511a76cbc618ab5cf0c"
+      },
+      "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
+      "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67"
+    },
     "shipped_inputs": {
       "tensorfold/artifacts/tensorfold-source.tar.gz": { "bytes": 2025673, "sha256": "8d4b2f808827fd247048082d122b8fab31b75e798b5ed86fd370103ef178469a" },
       "tensorfold/artifacts/tensorfold-kernels.tar.gz": { "bytes": 39844643, "sha256": "3e94bac39a953165b05930fc9ef91c905f6238e92640fab3dd984973d761f341" },
@@ -77,7 +105,8 @@
       "tensorfold/profiles/",
       "tensorfold/templates/",
       "tensorfold/variants/patch.py",
-      "tensorfold/variants/recipes/k2a.json"
+      "tensorfold/variants/recipes/k2a.json",
+      "tensorfold/variants/recipes/k2a-pb1.json"
     ],
     "destination": "/opt/ds41f/recipe"
   },
@@ -85,10 +114,12 @@
     "name": "TensorFold (Zig engine); frozen fork of ashhart/TensorFold with the dsv41 family, RDMA ring and tf-dsv41-lanes (BertholomusAI), carried in the recipe as tensorfold-source.tar.gz",
     "license": "Apache-2.0 (earlier code MIT)",
     "k2a_overlay": "27 files overlaid by tensorfold/variants/recipes/k2a.json; final source tree 1,137 files, verified by sha256 before and after the build",
+    "k2a_pb1_overlay": "k2a-pb1 overlays those 27 files plus the 2 in upstream_recipe.k2a_pb1 (29 in all); the source file count is unchanged because both replace existing files",
     "build_commands": [
       "python3 tensorfold/extract.py --out /build/ds41f",
-      "python3 tensorfold/variants/build.py build --recipe k2a --build-root /build/ds41f --out /build/built --zig /opt/zig/zig",
-      "python3 tensorfold/variants/build.py install --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5"
+      "python3 /src/pb1/make_recipe.py --recipe-root /src/recipe",
+      "python3 tensorfold/variants/build.py build --recipe k2a-pb1 --build-root /build/ds41f --out /build/built --zig /opt/zig/zig",
+      "python3 tensorfold/variants/build.py install --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5-pb1"
     ],
     "recorded_upstream_binaries_for_reference": {
       "tensorfold-native": { "bytes": 23164184, "sha256": "a79dd73d621397c5fd159b797850ef5d4ec8246b10bc89b96e26ffe2ee38dc2c" },
