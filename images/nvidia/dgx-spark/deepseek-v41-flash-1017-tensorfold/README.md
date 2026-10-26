@@ -152,27 +152,33 @@ Do these before any promotion:
 
 ## Petabridge patches (recipe k2a-pb1)
 
-The image builds `k2a-pb1`, upstream's `k2a` plus overlay files from `pb1/`. They go through upstream's own
+The image builds `k2a-pb1`, upstream's `k2a` plus overlay files from `pb1/overlay/`, each stored at its target path (the paths below are the targets). They go through upstream's own
 `patch.py` and `build.py` unchanged, so the launcher checks `k2a-pb1` the way it checks `k2a`.
 
 | Overlay | Change |
 | --- | --- |
 | `zig/src/server/tool_parse.zig` | A V4.1 DSML invoke naming a tool the request did not offer is returned as a tool call under its written name when calls are unlimited. Upstream rewrote it into the reply text: a streamed reply with no reasoning came back as raw DSML text (`finish_reason=stop`), and one with reasoning lost the call. The one-call policy (`parallel_tool_calls: false`) keeps upstream's behaviour. |
 | `zig/src/server/tool_parse_test.zig` | Upstream's test updated for the new behaviour, plus a block mixing offered and unoffered tools. |
-| `zig/src/core/lane_host.zig` | Between two 2,048-row chunks of a prompt pass, the head runs decode rounds for the other live streams for up to `TF_DS_PREFILL_INTERLEAVE_MS` ms, advancing the adaptive learner's clock as `run()` does. It delivers their tokens and takes their cancels, but leaves the filling job's own cancel for its pass. Ported by hand onto k2a's lane host because the patch's hunks misapplied there. Includes the patch's regression test. |
+| `zig/src/core/lane_host.zig` | Between two 2,048-row chunks of a prompt pass, the head runs decode rounds for the other live streams for up to `TF_DS_PREFILL_INTERLEAVE_MS` ms, advancing the adaptive learner's clock as `run()` does. It delivers their tokens and takes their cancels, but leaves the filling job's own cancel for its pass. Ported by hand onto k2a's lane host because the patch's hunks misapplied there. Includes the patch's regression test. The image prompt cache also changes this file: a request with a `cache_key` looks up, keeps and reports by that key within k2a's cache namespace. |
 | `zig/src/core/lanes/engine.zig` | k2a's file plus `runnableCount`. |
 | `zig/src/core/lanes/stream.zig` | k2a's file plus `Stream.between`. |
 | `zig/src/core/lanes/fake.zig` | Upstream's file plus the fake backend calling between rounds. |
-| `zig/src/families/dsv41/lanes.zig` | k2a's file plus the patch's hunks. The prompt pass offers rounds between chunks, joining the Engram read-ahead first, and the workers re-arm the read-ahead on `fill_chunk`. |
+| `zig/src/families/dsv41/lanes.zig` | k2a's file plus the patch's hunks. The prompt pass offers rounds between chunks, joining the Engram read-ahead first, and the workers re-arm the read-ahead on `fill_chunk`. For the image prompt cache, a prompt with pictures resumes a kept state, and the tower and workers get rows only for pictures after the resume point. |
 | `zig/src/families/dsv41/model.zig` | Upstream's file plus the patch's hunks. `fillChunk` keeps a joined read-ahead, and `verify` joins it. |
+| `zig/src/server/prompt.zig` | A prompt with pictures gets a cache key the same length as the prompt, with each picture's positions replaced by ids made from a hash of its payload (the same picture always the same ids, above every vocabulary id). Its history length is counted in the expanded prompt. |
+| `zig/src/server/chat.zig` | k2a's file plus passing `Request.cache_key` through. |
+| `zig/src/core/engine_api.zig` | k2a's file plus the `Request.cache_key` field. |
+| `zig/src/core/lane_host_reuse_test.zig` | The patch's test: a picture resumes its conversation, a different picture does not, and a request with no key neither resumes nor keeps. |
 
 The prefill interleave is a port of MiaAI-Lab's [`zig/patches/0005-prefill-interleave.patch`](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0005-prefill-interleave.patch) (author Coinupbtc). Without it, every prompt pass froze all decoding streams for its full length, at about 2.2K prompt tok/s, so a cold 135K-token prompt froze every reply for about a minute. With `TF_DS_PREFILL_INTERLEAVE_MS` set, the decoding streams keep getting rounds between the chunks of a prompt pass. It is off by default: unset or 0, the engine is unchanged. Prompts with images run whole, and the interleave is disabled while the core logs a trail.
 
+The image prompt cache is a port of MiaAI-Lab's [`zig/patches/0006-image-prompt-cache.patch`](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0006-image-prompt-cache.patch). The prompt cache finds kept states by token ids, and every picture's positions hold the same placeholder token, so a prompt with pictures was never looked up or kept: every turn of a conversation with an image in its history re-read the whole prompt from 0. Because image prompts run whole, each such turn also froze every other stream; a ~30K-token agent conversation carrying email-attachment images froze all streams for 15 to 19 s per turn. Now the server gives such a request a cache key built from a hash of each picture's payload, and the lane host looks up and keeps by that key. `TF_DS_IMAGE_CACHE` is on when unset and off at `0`. Image prompts still run without the interleave, but only the new part of each turn is prefilled. k2a's text prompts keep by the stream's context as before, and a request with pictures and no key is still refused by the cache.
+
 `pb1/make_recipe.py` runs in the `engine` stage and writes the overlay objects, `variants/recipes/k2a-pb1.json`
-(31 overlays: k2a has 27; the two `tool_parse` files, `fake.zig` and `model.zig` are new targets, and `lane_host.zig`, `engine.zig`, `stream.zig` and `dsv41/lanes.zig` replace k2a's own overlays of those files) and `profiles/1.2.5-pb1.json` (profile 1.2.5 with `build_variant: "k2a-pb1"`,
+(33 overlays: k2a has 27; the two `tool_parse` files, `fake.zig`, `model.zig`, `prompt.zig` and `lane_host_reuse_test.zig` are new targets, and `lane_host.zig`, `engine.zig`, `stream.zig`, `dsv41/lanes.zig`, `engine_api.zig` and `chat.zig` replace k2a's own overlays of those files) and `profiles/1.2.5-pb1.json` (profile 1.2.5 with `build_variant: "k2a-pb1"`,
 used only by `build.py install`). It refuses to run unless `k2a.json` is the pinned upstream file (`600c83c8...`)
 and each replaced file is still the one it was written against (upstream's base, or k2a's own overlay), so a new upstream commit cannot silently
-drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `b78a1a94...`. The image
+drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `be34b11c...`. The image
 carries both `recipes/k2a.json` and `recipes/k2a-pb1.json`.
 
 Upstream report: [MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67).
@@ -199,7 +205,7 @@ Deviations from the upstream procedure:
 
 | Change | Why |
 | --- | --- |
-| Builds recipe `k2a-pb1`, not upstream's `k2a`; `pb1/make_recipe.py` writes it in the `engine` stage | `k2a-pb1` is `k2a` plus overlays that fix an unoffered-tool-call bug and add an opt-in prefill interleave; everything else in `k2a` is unchanged. See [Petabridge patches](#petabridge-patches-recipe-k2a-pb1). |
+| Builds recipe `k2a-pb1`, not upstream's `k2a`; `pb1/make_recipe.py` writes it in the `engine` stage | `k2a-pb1` is `k2a` plus overlays that fix an unoffered-tool-call bug, add an opt-in prefill interleave and add an image prompt cache; everything else in `k2a` is unchanged. See [Petabridge patches](#petabridge-patches-recipe-k2a-pb1). |
 | `make_rope.py` runs in the `final` stage against the copied kit, with the venv and the upstream scripts mounted from other stages | The 5.12 GB of tables is written once, into one layer, instead of being copied between stages (a second copy would put about 5 GB more in the builder's cache). The script reads only `kit/models/TF351/config.json` and writes the four tables and `rope.json`, so the result is the same; the tables are checked against `rope-hashes.json` by the script and again afterwards. |
 | `extract.py` runs once in `recipe`, not inside the engine stage | `build.py` patches only `source/`; the engine and RoPE steps read `kit/` and `reference/` unchanged. |
 | The recipe file is asserted to hash to `600c83c8...`, not `ed9c269a...` | `ed9c269a...` is the earlier file measured as `1.2.4k2a`. The blob at `v1.2.5` hashes to `600c83c8...` and is what `BUILD.json` binds. See `dependency.lock.json`. |
