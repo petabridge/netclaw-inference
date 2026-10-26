@@ -12,6 +12,13 @@ Images:
 
 Changes:
 
+- **Build the DeepSeek V4.1 Flash 1017 image from recipe `k2a-pb1`, which returns tool calls to unoffered
+  tools.** Upstream's `k2a` rewrote a DSML invoke naming a tool the request did not offer into the reply
+  text, so a streamed reply with no reasoning came back as raw DSML text (`finish_reason=stop`) and one
+  with reasoning lost the call. `k2a-pb1` is `k2a` plus two overlay files (`tool_parse.zig`,
+  `tool_parse_test.zig`) that return the call under its written name when calls are unlimited;
+  `parallel_tool_calls: false` keeps upstream's behaviour. Launcher profiles must now use
+  `build_variant: "k2a-pb1"`. Reported upstream as MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67.
 - **Add Pillow 12.3.0 to the DeepSeek V4.1 Flash 1017 image.** The engine decodes non-PNG images
   through a `python3` child that imports Pillow (`dsv41/pil.zig`); without it the engine logged
   `vision: no Pillow (NoPillow): images other than PNG are refused` and rejected JPEG/WebP inputs.
