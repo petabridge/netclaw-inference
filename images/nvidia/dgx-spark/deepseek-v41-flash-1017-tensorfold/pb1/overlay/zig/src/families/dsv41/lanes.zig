@@ -495,8 +495,9 @@ pub const Lanes = struct {
         var moved = false;
         if (s.reuse.saved) |p| {
             const sn: *Snap = @ptrCast(@alignCast(p));
-            // (a kept state knows no images: a prompt with them runs whole and keeps nothing)
-            if (s.images.len == 0 and self.usable(sn, len)) {
+            // (a prompt with images resumes a kept state too: the cache keys the image positions by the picture's content, so the
+            // state's rows are this prompt's own; the pictures before the cut need no rows again, below)
+            if (self.usable(sn, len)) {
                 kept = sn;
                 moved = sn.base + size > m.pool_cap or clashes(taken[0..nt], sn.base, sn.base + size) or
                     self.overwritesKept(sn.base + sn.at, sn.base + size, sn);
@@ -531,12 +532,16 @@ pub const Lanes = struct {
             const image_id = m.cfg.image_token orelse return error.NoVision;
             const row_bytes = m.cfg.hidden * 2;
             var at_row: usize = 0;
+            // a resumed pass starts at the kept state's end: a picture wholly before it is already in the state (its positions stay
+            // dead in the sequence for Engram's n-grams, but it needs no rows and no run of the tower)
+            const resume_at: usize = if (kept) |sn| sn.at else 0;
             for (s.images) |img| {
                 if (img.tokens == 0 or @as(usize, img.at) + img.tokens > len) return error.BadImageSpan;
                 for (seq.items[img.at..][0..img.tokens]) |*q| {
                     if (q.* != @as(i64, image_id)) return error.BadImageSpan;
                     q.* = -1;
                 }
+                if (@as(usize, img.at) + img.tokens <= resume_at) continue;
                 if (img.rows) {
                     if (img.bytes.len != img.tokens * row_bytes) return error.BadImageRows;
                     try rows.appendSlice(gpa, img.bytes);
@@ -623,7 +628,7 @@ pub const Lanes = struct {
             head = try m.fillChunk(seq.items[0 .. start + n], start, n, replay);
             start += n;
             progress.record(self, s, start);
-            if (s.images.len == 0) if (s.reuse.hook) |k| if (start < len and start <= replay and (start == last_end or markEnds(s.reuse.marks, start))) k.at(k.ptr, s, @intCast(start));
+            if (s.reuse.hook) |k| if (start < len and start <= replay and (start == last_end or markEnds(s.reuse.marks, start))) k.at(k.ptr, s, @intCast(start));
             // prefill interleave: the other streams' rounds between this pass's chunks (verify frames go to rank 1 in
             // order; every state a pass carries from chunk to chunk is the slot's, except the Engram read-ahead, which
             // a round's own Engram reads would race: joined first, its rows kept for the next chunk)

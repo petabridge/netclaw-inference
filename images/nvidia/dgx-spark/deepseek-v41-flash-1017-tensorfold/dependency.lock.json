@@ -63,59 +63,79 @@
     },
     "k2a_source_tree_sha256": "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade",
     "k2a_pb1": {
-      "note": "Petabridge's recipe: k2a plus 31 overlays (k2a's 27 plus the 2 tool_parse files and fake.zig and model.zig as new targets; lane_host.zig, engine.zig, stream.zig and dsv41/lanes.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Its BUILD.json identity is this recipe file's sha256.",
+      "note": "Petabridge's recipe: k2a plus 33 overlays (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "b78a1a947f27f5d4c8c74ef9eed41d78cc0570b90bd96607899608ffc37cf0d0"
+        "sha256": "be34b11c1dfa9c97a295d6e2971f4883f9b3881c3ae227cea5bdefd532f71c23"
       },
-      "source_tree_sha256": "a9d29d9972fcb29a3caed1cb91c24e6c05bcd4068f9b7cd33c368c30270e02a8",
+      "source_tree_sha256": "e23ebd40169487f39d43e5f7a445e51e539829cf99b48c582fd1928117991a51",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
         "zig/src/server/tool_parse.zig": {
-          "file": "pb1/tool_parse.zig",
+          "file": "pb1/overlay/zig/src/server/tool_parse.zig",
           "sha256": "18ce473e908cc71810af3c6b93abb0c7b72ec5ea857a6543ef405794cb01983b",
           "replaces_base_sha256": "211918aed38ccbf5081f9427374d2a33c7e5b903a1481ebd8859950e8a3b5bb0"
         },
         "zig/src/server/tool_parse_test.zig": {
-          "file": "pb1/tool_parse_test.zig",
+          "file": "pb1/overlay/zig/src/server/tool_parse_test.zig",
           "sha256": "423ab706642514ce01a54fc9358d3e99d5f8853531be6d9cb8697077d5c2d2c8",
           "replaces_base_sha256": "53e8a544a1604af7f01715148800af0cdcad09874c94f15123cd723fee0c0fa4"
         },
         "zig/src/core/lane_host.zig": {
-          "file": "pb1/interleave/lane_host.zig",
-          "sha256": "2591334adac65eea3c81f3a2232b1b1ea4e4817dffcf6759e017fd9f906919a4",
+          "file": "pb1/overlay/zig/src/core/lane_host.zig",
+          "sha256": "9764ae266b71b64b366c17ba53ccee779f7b8fabf2c60a5281bccf049e8c5997",
           "replaces_base_sha256": "63a04d2285d41d23de7179ba66fd1f9943618f78636c679307e4fb6d9d8c185d"
         },
         "zig/src/core/lanes/engine.zig": {
-          "file": "pb1/interleave/engine.zig",
+          "file": "pb1/overlay/zig/src/core/lanes/engine.zig",
           "sha256": "c419470a733355c56c2b71a63e2f5ec4b035da04b5d5b064f5224eb504c33655",
           "replaces_base_sha256": "7b6a7b6db774aded6887e33617894511b085f5ce3a2ab16284cc3b05bb7cac29"
         },
         "zig/src/core/lanes/stream.zig": {
-          "file": "pb1/interleave/stream.zig",
+          "file": "pb1/overlay/zig/src/core/lanes/stream.zig",
           "sha256": "223d9cde7e4bc541eb18e48b5d52b6e589ac35b04d3cb09621b0bb8bcf20e7eb",
           "replaces_base_sha256": "1eee608d15f66d0844e2d4673ebbab8d979821041d209828e4810ae1278b269e"
         },
         "zig/src/core/lanes/fake.zig": {
-          "file": "pb1/interleave/fake.zig",
+          "file": "pb1/overlay/zig/src/core/lanes/fake.zig",
           "sha256": "1140838396ef03afd5998bbf30e3ffc1fb3c7e2551b9a6eece65ead34bf0ad66",
           "replaces_base_sha256": "b4e88c57fcc8f31bbd462320818ce44734be0b93da616ae6105597344a42a302"
         },
         "zig/src/families/dsv41/lanes.zig": {
-          "file": "pb1/interleave/dsv41_lanes.zig",
-          "sha256": "98d63599da3cb230d80815a8e2a0c447874eb0f3e32bae3d8334742b04c01a16",
+          "file": "pb1/overlay/zig/src/families/dsv41/lanes.zig",
+          "sha256": "602bd814f52938184c48baebe5b342276ca0ac65c2a26a9d9309a85e1d8f4093",
           "replaces_base_sha256": "00506fc47eeb39b06f414c92be81c2d661d4cc818d5324d4cff7b681e7f9de95"
         },
         "zig/src/families/dsv41/model.zig": {
-          "file": "pb1/interleave/dsv41_model.zig",
+          "file": "pb1/overlay/zig/src/families/dsv41/model.zig",
           "sha256": "919f0051acab95cb5b49d79a1e30eb8506a9a41a6436a0ce0e7b973f3db2328a",
           "replaces_base_sha256": "9fbd6a092c2e62661b08a16990a441a4b610c4c789a60b01e78e078b65ca20c2"
+        },
+        "zig/src/core/engine_api.zig": {
+          "file": "pb1/overlay/zig/src/core/engine_api.zig",
+          "sha256": "1630eeb4670bd50c524536fd3d2ee99a25d46d8471ad6ceaa7336e74268c85a6",
+          "replaces_base_sha256": "198ec7a4b25bf13a62c55e70116c4112e79cf326e21a55525250280926a4c925"
+        },
+        "zig/src/core/lane_host_reuse_test.zig": {
+          "file": "pb1/overlay/zig/src/core/lane_host_reuse_test.zig",
+          "sha256": "b9b70e1a3a88bb084db34dfad750a282f79675e9c5d3dc3de94a29e5ba19f13f",
+          "replaces_base_sha256": "69adf37d7fe392f34e24e7be0e6ca4bced32fcb41bdbb3f91cc72da928b17d9a"
+        },
+        "zig/src/server/prompt.zig": {
+          "file": "pb1/overlay/zig/src/server/prompt.zig",
+          "sha256": "3ef11f108c6722e467c94ba8cb7959b675ba5f361a5a478a06005b9b0367cbf1",
+          "replaces_base_sha256": "9a3f360224a1b0f0d19d07b070652b09776fbbcb294587ae305818a89eb93798"
+        },
+        "zig/src/server/chat.zig": {
+          "file": "pb1/overlay/zig/src/server/chat.zig",
+          "sha256": "3d21285ab333351d15746e1eaf899d05d3901ba4100a0fc0979176eabb9d7bcc",
+          "replaces_base_sha256": "f96ab77e5d3013249cc312940489f74d9f99e1325a13e85dd691ab25e0321914"
         }
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "cfaf0c3aa3348f1df454635d7bb26e4b255a7396c49728a42ba33ffde93942d8"
+        "sha256": "473e7b7ba3a81dc90c95e425a212dce78639632fed61fa225ebfc308225e157f"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
       "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
@@ -124,6 +144,11 @@
           "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0005-prefill-interleave.patch",
           "author": "Coinupbtc",
           "note": "Prefill interleave; opt-in through TF_DS_PREFILL_INTERLEAVE_MS. lane_host.zig is ported by hand because the patch hunks misapplied onto k2a."
+        },
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0006-image-prompt-cache.patch",
+          "author": "MiaAI-Lab",
+          "note": "Image prompt cache; on unless TF_DS_IMAGE_CACHE=0. lane_host.zig is ported by hand onto k2a's; server/chat.zig and core/engine_api.zig are k2a's overlays plus Request.cache_key."
         }
       ]
     },
@@ -151,7 +176,7 @@
     "name": "TensorFold (Zig engine); frozen fork of ashhart/TensorFold with the dsv41 family, RDMA ring and tf-dsv41-lanes (BertholomusAI), carried in the recipe as tensorfold-source.tar.gz",
     "license": "Apache-2.0 (earlier code MIT)",
     "k2a_overlay": "27 files overlaid by tensorfold/variants/recipes/k2a.json; final source tree 1,137 files, verified by sha256 before and after the build",
-    "k2a_pb1_overlay": "k2a-pb1 overlays those 27 files plus the 2 in upstream_recipe.k2a_pb1 (29 in all); the source file count is unchanged because both replace existing files",
+    "k2a_pb1_overlay": "k2a-pb1 overlays those 27 files plus the 6 new targets in upstream_recipe.k2a_pb1 (33 in all); the source file count is unchanged because they replace existing files",
     "build_commands": [
       "python3 tensorfold/extract.py --out /build/ds41f",
       "python3 /src/pb1/make_recipe.py --recipe-root /src/recipe",

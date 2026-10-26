@@ -12,6 +12,18 @@ Images:
 
 Changes:
 
+- **Add an image prompt cache to recipe `k2a-pb1` of the DeepSeek V4.1 Flash 1017 image.** The prompt
+  cache finds kept states by token ids, and every picture's positions hold the same placeholder token,
+  so a prompt with pictures was never looked up or kept. Every turn of a conversation with an image in
+  its history re-read the whole prompt from 0, and because image prompts run whole, each turn froze
+  every other stream: an agent conversation of about 30K tokens carrying email-attachment images froze
+  all streams for 15 to 19 s per turn. The server now gives such a request a cache key with each
+  picture's positions replaced by ids made from a hash of its payload, and the lane host looks up and
+  keeps by that key. `TF_DS_IMAGE_CACHE` is on when unset and off at `0`. Image prompts still run
+  without the prefill interleave, but only prefill the new part of each turn. Six new overlay targets
+  (`server/prompt.zig` and the patch's test among them) and six replaced k2a overlays bring `k2a-pb1`
+  to 33 overlays, and every overlay file now lives at its target path under `pb1/overlay/`. Ported from
+  MiaAI-Lab's `zig/patches/0006-image-prompt-cache.patch`; `lane_host.zig` is ported by hand.
 - **Add an opt-in prefill interleave to recipe `k2a-pb1` of the DeepSeek V4.1 Flash 1017 image.**
   Without it, every prompt pass froze all decoding streams for its full length, at about 2.2K prompt
   tok/s, so a cold 135K-token prompt froze every reply for about a minute. With
