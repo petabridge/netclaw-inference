@@ -66,9 +66,9 @@
       "note": "Petabridge's recipe: k2a plus 37 overlays and 12 new files (the inert spill store under zig/src/core/spill/ and the unwired dsv41 spill host modules) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "0d0c908bdcb9a1b55fb77b249be3e45190dd39c45179f2519e5c564d2405ac97"
+        "sha256": "123514692e43e2a6ecb172033fc228a1cc8c348aeaa054f111c0dd6fd138999b"
       },
-      "source_tree_sha256": "91dc76c8a6061558392e26f1fbc22e80a9330c343cf31ea285455fe51a0328be",
+      "source_tree_sha256": "83abc70e69cacc118b528b7b04b6f85c9f5bc1c30dc59f36059bf177bfac5617",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -109,7 +109,7 @@
         },
         "zig/src/families/dsv41/model.zig": {
           "file": "pb1/overlay/zig/src/families/dsv41/model.zig",
-          "sha256": "368830416374795f860fe00f129520593e651c51709d7e45d3ec4273c22ba85a",
+          "sha256": "5c520328ecc763191604f85b863f502f617d1fe4354d72fa46e6d7db60996626",
           "replaces_base_sha256": "9fbd6a092c2e62661b08a16990a441a4b610c4c789a60b01e78e078b65ca20c2"
         },
         "zig/src/core/engine_api.zig": {
@@ -139,7 +139,7 @@
         },
         "zig/src/families/dsv41/dsv41.zig": {
           "file": "pb1/overlay/zig/src/families/dsv41/dsv41.zig",
-          "sha256": "f6081502a8749dce5789f265576a6eabc29129638d0503a43e6e396817f81872",
+          "sha256": "80f5b1f2a05aa36a4c93f22f12bff75acca6d8641a317aa7811ea9cdef00372b",
           "replaces_base_sha256": "e0be7b5fb7afcd6945eb1512073cc2f4e5d38052e624b1fa1682e20c56086e7a"
         },
         "zig/src/families/dsv41/link.zig": {
@@ -169,11 +169,16 @@
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "2e7713e7ece5b837911cef2174a4f05c6816a56477a1b3fe15f30e0746ad0905"
+        "sha256": "a1bf1ba6bce6e0f2de056f5dada94ba84b024912219a48277de780a2bfde77fe"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
       "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
       "ported_patches": [
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0016-dsv41-spill-blocks.patch",
+          "author": "MiaAI-Lab",
+          "note": "spill v2 step P4: 0016's model side (SpillDev, the layout and its self-check); the small state is our Snap less the drafter rings and prompt logits; a startup line on every rank, host-only while spill is off"
+        },
         {
           "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0016-dsv41-spill-blocks.patch",
           "author": "MiaAI-Lab",
