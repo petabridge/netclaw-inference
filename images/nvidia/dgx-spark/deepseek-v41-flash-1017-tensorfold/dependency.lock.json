@@ -66,9 +66,9 @@
       "note": "Petabridge's recipe: k2a plus 33 overlays (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "be34b11c1dfa9c97a295d6e2971f4883f9b3881c3ae227cea5bdefd532f71c23"
+        "sha256": "fc27cde0163915ecc40d1e38a9b84cb3cb898d6e38a8f47bb24caf8eebc14fc6"
       },
-      "source_tree_sha256": "e23ebd40169487f39d43e5f7a445e51e539829cf99b48c582fd1928117991a51",
+      "source_tree_sha256": "8a58576e00a8d7749dc53d14355656a9df28a3001b696719c0d52bd51db1a56c",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -104,7 +104,7 @@
         },
         "zig/src/families/dsv41/lanes.zig": {
           "file": "pb1/overlay/zig/src/families/dsv41/lanes.zig",
-          "sha256": "602bd814f52938184c48baebe5b342276ca0ac65c2a26a9d9309a85e1d8f4093",
+          "sha256": "89e5c141e3a3a38214e4fee0d59b51729dead0c3fc30896b92734905c3fb48aa",
           "replaces_base_sha256": "00506fc47eeb39b06f414c92be81c2d661d4cc818d5324d4cff7b681e7f9de95"
         },
         "zig/src/families/dsv41/model.zig": {
@@ -135,7 +135,7 @@
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "473e7b7ba3a81dc90c95e425a212dce78639632fed61fa225ebfc308225e157f"
+        "sha256": "bd08a79be633e2c93abb0aa2f033c7dca4714d54b6919e2618b2c67a689e76d2"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
       "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
