@@ -50,6 +50,15 @@ The changes:
       verbatim, except two tests (fsio's partial direct write, store_test's write faults): their simulated short
       write is a real unaligned pwrite on an O_DIRECT descriptor, which Linux refuses on ext4, so the direct
       variant skips where the kernel refuses the simulation; the buffered variants still run
+  spill v2, step P3: the dsv41 host modules, compiled and tested, not wired (MiaAI-Lab 0016/0019 tip)
+    families/dsv41/{fingerprint,parts,spill_state}.zig (new files): verbatim; parts.zig only as a type dependency of
+      rank_wire and rank_identity (KV sharding is not ported)
+    families/dsv41/rank_identity.zig (new file): world 3 added to splitText/rankSplitText (plain TP3, as prompt2d's
+      split has it), plus a TP3 test
+    families/dsv41/rank_wire.zig (new file, v2): verbatim outside its tests; test-only follower fields and world-3
+      tests (agreement, a point missing or damaged on one follower aborting with forget on both, rank vs common fields)
+    families/dsv41/dsv41.zig: exports the modules and runs their tests with the family's; link.zig: MiaAI 0016's
+      bounded reply reads (readable, recvWithin) that rank_wire needs; rank_cache.zig: writeFake made pub for a test
 """
 import argparse
 import hashlib
@@ -76,6 +85,9 @@ OVERLAYS = {
     "zig/src/server/prompt.zig": "9a3f360224a1b0f0d19d07b070652b09776fbbcb294587ae305818a89eb93798",
     "zig/src/server/chat.zig": "f96ab77e5d3013249cc312940489f74d9f99e1325a13e85dd691ab25e0321914",
     "zig/src/core/root.zig": "ffcf279a324ad3a236fdb6aac3aed63ce295aa02dcd0037fc86d922dd19e5917",
+    "zig/src/families/dsv41/dsv41.zig": "e0be7b5fb7afcd6945eb1512073cc2f4e5d38052e624b1fa1682e20c56086e7a",
+    "zig/src/families/dsv41/link.zig": "bd0509c979e4adac66a3705657ed2e6155a35969153da91ce1b26cf91cb3f6ab",
+    "zig/src/families/dsv41/rank_cache.zig": "a7e6794e4ecf7c20bcce1bb9effef374382be53794d7578f815b26b458ca529e",
 }
 # Files k2a-pb1 adds that upstream's tree does not have (their file is overlay/<target path>): each must be absent
 # from k2a.json's source_files, so an upstream that starts shipping one makes this script stop instead of clobbering it.
@@ -87,6 +99,11 @@ NEW_FILES = [
     "zig/src/core/spill/slots.zig",
     "zig/src/core/spill/store.zig",
     "zig/src/core/spill/store_test.zig",
+    "zig/src/families/dsv41/fingerprint.zig",
+    "zig/src/families/dsv41/parts.zig",
+    "zig/src/families/dsv41/rank_identity.zig",
+    "zig/src/families/dsv41/rank_wire.zig",
+    "zig/src/families/dsv41/spill_state.zig",
 ]
 
 
