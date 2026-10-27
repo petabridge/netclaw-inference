@@ -174,6 +174,134 @@ pub const Open = struct {
     /// --device and --segments (CUDA); null: the backend's environment fallback, then its default.
     device: ?u32 = null,
     segments: ?u32 = null,
+    /// PETABRIDGE (k2a-pb1) spill P5: 0014. The prompt cache's disk tier and parked-request scheduling (spill v2);
+    /// every switch off. Nothing reads it yet (P6 binds it in the backend; P7 passes the flags).
+    spill: Spill = .{},
+};
+
+/// PETABRIDGE (k2a-pb1) spill P5: 0014's Spill, verbatim.
+/// The prompt cache's durable tier and its scheduling (wojo's GLM 0088/0110/0111): --spill-*, with TF_SPILL_* for the
+/// rest. Off unless both a directory and a cap are given; every rank of an engine must be opened with the same values
+/// (the family checks them before any spill command).
+pub const Spill = struct {
+    /// --spill-dir: this rank's local store (a fresh native namespace under it; never the model or Engram mount).
+    dir: ?[]const u8 = null,
+    /// --spill-gib: what the store may hold on this rank (0: off).
+    gib: f64 = 0,
+    /// --spill-min-free-gib: no write leaves less free on the store's file system.
+    min_free_gib: f64 = 50,
+    /// --spill-quota: one conversation's share of the cap (0: none).
+    quota: f64 = 0,
+    /// --spill-min-tokens: shorter kept states are not written.
+    min_tokens: u32 = 8192,
+    /// TF_SPILL_TURNS: old turns kept on a conversation's active path before they go first (0: until room is needed).
+    turns: u32 = 4,
+    /// TF_SPILL_LOAD_MS: one service's budget for every restore together, then staged writes (at least 1).
+    load_ms: u32 = 40,
+    /// TF_SPILL_LOAD_WAIT_MS: how long a request waits parked on a restore before it is admitted without it.
+    load_wait_ms: u32 = 30_000,
+    /// TF_SPILL_FLUSH_MS: a clean shutdown's bound for draining writes.
+    flush_ms: u32 = 60_000,
+
+    /// The disk tier is on.
+    pub fn enabled(s: Spill) bool {
+        return s.dir != null and s.gib > 0;
+    }
+
+    /// Whether the disk tier was asked for and `engine` did not take it: a backend that wires it configures its lane
+    /// host (LaneHost.configure), whose status then carries the cache's counters.
+    pub fn unbound(s: Spill, engine: Engine) bool {
+        if (!s.enabled()) return false;
+        var st: Status = .{};
+        engine.status(&st, &.{});
+        return st.cache == null;
+    }
+};
+
+/// PETABRIDGE (k2a-pb1) spill P5: 0014's CacheStats, verbatim.
+/// The prompt cache's counters for /health and /metrics, read from HTTP threads as one copy (LaneHost publishes it on
+/// its engine thread). Null in Status unless a tier or grouping is on. Totals unless in `gauges`.
+pub const CacheStats = struct {
+    memory_hits: u64 = 0,
+    memory_misses: u64 = 0,
+    kept: u64 = 0,
+    evicted: u64 = 0,
+    refused: u64 = 0,
+    failed: u64 = 0,
+    entries: u64 = 0,
+    held_bytes: u64 = 0,
+    disk_lookups: u64 = 0,
+    disk_hits: u64 = 0,
+    disk_hits_committed: u64 = 0,
+    restores_begun: u64 = 0,
+    restores_shared: u64 = 0,
+    restores_failed: u64 = 0,
+    restores_cancelled: u64 = 0,
+    restores_dropped: u64 = 0,
+    restores_refused: u64 = 0,
+    restores_active: u64 = 0,
+    restoring_bytes: u64 = 0,
+    restore_blocks_done: u64 = 0,
+    restore_blocks_total: u64 = 0,
+    restored_tokens: u64 = 0,
+    restore_waits: u64 = 0,
+    restore_wait_timeouts: u64 = 0,
+    restore_wait_ns: u64 = 0,
+    restore_wait_max_ns: u64 = 0,
+    writes_enqueued: u64 = 0,
+    shared_promoted: u64 = 0,
+    flushes: u64 = 0,
+    flush_timeouts: u64 = 0,
+    flush_unpublished: u64 = 0,
+    parked: u64 = 0,
+    chats_continued: u64 = 0,
+    chats_continued_prefill_tokens: u64 = 0,
+    cached_tokens: u64 = 0,
+    computed_tokens: u64 = 0,
+    /// The tier's own counters, each rank's (null: no tier).
+    spill: ?prompt_cache.RankCounts = null,
+
+    pub const gauges = [_][]const u8{ "entries", "held_bytes", "restores_active", "restoring_bytes", "restore_blocks_done", "restore_blocks_total", "parked" };
+
+    /// Each field's /metrics help (a missing one fails the build).
+    pub const help = .{
+        .memory_hits = "Prompt passes that resumed a kept state in memory.",
+        .memory_misses = "Prompt lookups that found no usable kept state.",
+        .kept = "Prompt states kept in memory.",
+        .evicted = "Kept states evicted from memory for room.",
+        .refused = "Prompt states not kept: past the memory budget.",
+        .failed = "Kept states that failed to save or restore.",
+        .entries = "Prompt states kept in memory now.",
+        .held_bytes = "Bytes the kept states hold now.",
+        .disk_lookups = "Lookups that asked the disk tier.",
+        .disk_hits = "Lookups whose durable point was longer than the best usable memory state.",
+        .disk_hits_committed = "Disk restores every rank installed, adopted as kept states.",
+        .restores_begun = "Disk restore jobs started.",
+        .restores_shared = "Requests that joined a disk restore already in flight.",
+        .restores_failed = "Disk restores aborted on every rank (missing, damaged, guarded).",
+        .restores_cancelled = "Disk restores stopped: no request waited for them any more, or shutdown.",
+        .restores_dropped = "Installed disk restores not adopted: no room, or memory already had them.",
+        .restores_refused = "Disk restores not begun: the memory budget could not hold their destination.",
+        .restores_active = "Disk restore jobs in flight.",
+        .restoring_bytes = "Memory the disk restores in flight reserved, charged to the prompt cache's budget.",
+        .restore_blocks_done = "Blocks the restores in flight have copied so far.",
+        .restore_blocks_total = "Blocks the restores in flight copy in all.",
+        .restored_tokens = "Prompt tokens restored from disk.",
+        .restore_waits = "Requests parked on a disk restore.",
+        .restore_wait_timeouts = "Requests admitted without their disk restore after TF_SPILL_LOAD_WAIT_MS.",
+        .restore_wait_ns = "Nanoseconds requests waited for disk restores.",
+        .restore_wait_max_ns = "The longest wait for a disk restore, in nanoseconds.",
+        .writes_enqueued = "Kept states enqueued for the disk tier at their keep.",
+        .shared_promoted = "Disk points promoted to shared prefixes.",
+        .flushes = "Clean-shutdown flushes of the disk tier.",
+        .flush_timeouts = "Flushes that reached their deadline with points unpublished.",
+        .flush_unpublished = "Points left unpublished at a flush deadline.",
+        .parked = "Requests parked on a disk restore now (reading it, or deferred to ask again).",
+        .chats_continued = "Streams that continued a conversation without resuming from its own turn state.",
+        .chats_continued_prefill_tokens = "Prompt tokens those streams prefilled.",
+        .cached_tokens = "Prompt tokens passes resumed from kept states.",
+        .computed_tokens = "Prompt tokens passes computed.",
+    };
 };
 
 /// An opened engine; ``close`` stops its thread and frees its backend.
@@ -237,6 +365,9 @@ pub const Status = struct {
     generation_tokens: u64 = 0,
     token_pool: ?lanes.backend.TokenPool = null,
     prefill_telemetry: ?PrefillTelemetry = null,
+    /// PETABRIDGE (k2a-pb1) spill P5: 0014. The prompt cache's counters, when its tier or grouping is on (null: off,
+    /// which is every engine until P6 configures one).
+    cache: ?CacheStats = null,
 };
 
 pub const SubmitError = error{ Closed, Busy };
@@ -326,6 +457,8 @@ test {
     _ = @import("lane_host.zig");
     _ = @import("lane_host_reuse_test.zig");
     _ = @import("prompt_cache.zig");
+    _ = @import("lane_host_tier_test.zig"); // PETABRIDGE (k2a-pb1) spill P5: 0014's host tests (tip, adapted)
+    _ = @import("spill_p5_k2a_test.zig"); // PETABRIDGE (k2a-pb1) spill P5: the k2a fit's own tests
     _ = @import("prompt_imprint.zig");
     _ = @import("keepalive.zig");
 }
