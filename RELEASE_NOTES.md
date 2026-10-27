@@ -12,6 +12,11 @@ Images:
 
 Changes:
 
+- **Fix a stale Engram read-ahead in the DeepSeek V4.1 Flash 1017 image (recipe `k2a-pb1`).** The prefill
+  interleave port (MiaAI-Lab 0005) lets `fillChunk` reuse an already-joined read-ahead with a matching
+  `start` and `n`. A pass that ended early between chunks left that state set, so a later pass whose
+  first chunk began at the same position (a resume there) used the other prompt's Engram rows for that
+  chunk, silently degrading its output. `fillBegin` now joins and clears the read-ahead on every rank.
 - **Retain resumed conversations in the DeepSeek V4.1 Flash 1017 image's prompt cache (recipe `k2a-pb1`).**
   Kept prompt states live in the shared KV pool, and upstream gave up the oldest first when a new stream
   needed room, so an agent's long main conversation, idle while its subagents ran, always lost its state

@@ -612,6 +612,15 @@ pub const Model = struct {
         m.view = try m.caches.view(&m.eng, slot, base);
         for (m.rings, m.ring_view) |r, *v| v.* = r + slot * m.eng.ringBytes();
         m.fill_slot = slot;
+        // PETABRIDGE (k2a-pb1): a read-ahead the previous pass left joined holds that prompt's Engram rows. A pass that
+        // ended early (a cancel between chunks, or the prefill interleave's error) leaves ahead_start/ahead_n/ready
+        // set, and fillChunk's joined-read-ahead reuse (MiaAI-Lab 0005) would take them for this prompt's first chunk
+        // when it starts at the same position (a resume there): another prompt's rows, silently. Never this pass's.
+        m.joinAhead();
+        if (m.eh) |*eh| {
+            eh.ahead_ready = .{ false, false };
+            eh.ahead_err = null;
+        }
     }
 
     /// The prompt's chunk of n rows from position `start` (seq: the stream's ids through the chunk's end) through every
