@@ -12,6 +12,10 @@ Images:
 
 Changes:
 
+- **Print the DeepSeek V4.1 Flash 1017 engine's CPU check logs when one fails.** `build.py` writes each check's
+  output (`zig build test` and the four `zig test` runs) to `/build/built/build-<n>.log` and only raises, so a
+  failing check showed nothing in CI. The engine stage now prints the tail of each log on failure (the RDMA
+  mock's per-rank lines dropped) and fails as before.
 - **Spill v2, step P2: add the disk block store to the DeepSeek V4.1 Flash 1017 image, inert (recipe `k2a-pb1`).**
   The first step of porting MiaAI-Lab's spill-to-disk prompt cache (`0013-core-spill-store`) onto the TP3
   K2a engine: seven new files under `zig/src/core/spill/` and their export, verbatim. Nothing opens a store
