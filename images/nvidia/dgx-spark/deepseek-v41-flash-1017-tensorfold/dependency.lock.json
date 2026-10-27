@@ -63,12 +63,12 @@
     },
     "k2a_source_tree_sha256": "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade",
     "k2a_pb1": {
-      "note": "Petabridge's recipe: k2a plus 34 overlays and 7 new files (the inert spill store under zig/src/core/spill/) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
+      "note": "Petabridge's recipe: k2a plus 37 overlays and 12 new files (the inert spill store under zig/src/core/spill/ and the unwired dsv41 spill host modules) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "d2e44a1a765279548a467c5f0eeac76832a14ae7ff3e071185009b111817f58d"
+        "sha256": "0d0c908bdcb9a1b55fb77b249be3e45190dd39c45179f2519e5c564d2405ac97"
       },
-      "source_tree_sha256": "9f1e8c65c31d7c96a25faa1557702b99e71945872cfb28f8bb3a62e14ca291dd",
+      "source_tree_sha256": "91dc76c8a6061558392e26f1fbc22e80a9330c343cf31ea285455fe51a0328be",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -136,6 +136,21 @@
           "file": "pb1/overlay/zig/src/core/root.zig",
           "sha256": "a0becb3e8d5156d03902983b9f37f6ac5f3dab44b29ea91039c9c59fa0e604d1",
           "replaces_base_sha256": "ffcf279a324ad3a236fdb6aac3aed63ce295aa02dcd0037fc86d922dd19e5917"
+        },
+        "zig/src/families/dsv41/dsv41.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/dsv41.zig",
+          "sha256": "f6081502a8749dce5789f265576a6eabc29129638d0503a43e6e396817f81872",
+          "replaces_base_sha256": "e0be7b5fb7afcd6945eb1512073cc2f4e5d38052e624b1fa1682e20c56086e7a"
+        },
+        "zig/src/families/dsv41/link.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/link.zig",
+          "sha256": "fa3d3626795b72d654cf81363eebd50bee62fef34c809a16f7b42b7f6e9019cd",
+          "replaces_base_sha256": "bd0509c979e4adac66a3705657ed2e6155a35969153da91ce1b26cf91cb3f6ab"
+        },
+        "zig/src/families/dsv41/rank_cache.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/rank_cache.zig",
+          "sha256": "4da4d5b943785bcb9d9f821bc33cd6f417016c309e07f0532a4754404160f2ea",
+          "replaces_base_sha256": "a7e6794e4ecf7c20bcce1bb9effef374382be53794d7578f815b26b458ca529e"
         }
       },
       "new_files": {
@@ -145,15 +160,25 @@
         "zig/src/core/spill/root.zig": { "file": "pb1/overlay/zig/src/core/spill/root.zig", "sha256": "b61e88b8407693965c62615464cb595e4867f10db005b9f1b7974fa01dc00fc4" },
         "zig/src/core/spill/slots.zig": { "file": "pb1/overlay/zig/src/core/spill/slots.zig", "sha256": "a90b9afb856f6a47b05e95ce20b6bccfe52288a6a9daef5b8705976548f04316" },
         "zig/src/core/spill/store.zig": { "file": "pb1/overlay/zig/src/core/spill/store.zig", "sha256": "8841edca1da954102c5df0be62a3bd693ef8e1416e1f83754924088d7bc8db16" },
-        "zig/src/core/spill/store_test.zig": { "file": "pb1/overlay/zig/src/core/spill/store_test.zig", "sha256": "c02e27d20b2aa48fc6c2632f50de6241a9a011b93890d26cde02c6f637fa58f4" }
+        "zig/src/core/spill/store_test.zig": { "file": "pb1/overlay/zig/src/core/spill/store_test.zig", "sha256": "c02e27d20b2aa48fc6c2632f50de6241a9a011b93890d26cde02c6f637fa58f4" },
+        "zig/src/families/dsv41/fingerprint.zig": { "file": "pb1/overlay/zig/src/families/dsv41/fingerprint.zig", "sha256": "21be879b245a329db4a86a0f0e409ebf322c044a1fbeb6233c5c1ec32983a2a5" },
+        "zig/src/families/dsv41/parts.zig": { "file": "pb1/overlay/zig/src/families/dsv41/parts.zig", "sha256": "80d9afcaad39495ef66b82ac00671207d7d3b5bdc15e081474c20d674232e36b" },
+        "zig/src/families/dsv41/rank_identity.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_identity.zig", "sha256": "d163462522dde8f52cf42f022cd24398f99013ceacc1c33810c4428f45ad2a81" },
+        "zig/src/families/dsv41/rank_wire.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_wire.zig", "sha256": "13ae9adce37770258855019d85f22426504af6e2e84c24efa47658a28f887939" },
+        "zig/src/families/dsv41/spill_state.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_state.zig", "sha256": "12a331a70ddc0a23830f5653e8a3fe4e2a8aa938f54d5c7e2e2f84b0cff5d148" }
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "81e7f7412c31d87963fbad263e0f31d5764a60a0332705df7e2f08af918ed78e"
+        "sha256": "2e7713e7ece5b837911cef2174a4f05c6816a56477a1b3fe15f30e0746ad0905"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
       "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
       "ported_patches": [
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0016-dsv41-spill-blocks.patch",
+          "author": "MiaAI-Lab",
+          "note": "spill v2 step P3, with 0019's rank_wire v2: the dsv41 host modules (fingerprint, rank_identity, rank_wire, spill_state, parts as a type dependency), not wired; world 3 added"
+        },
         {
           "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0013-core-spill-store.patch",
           "author": "MiaAI-Lab (from wojo's GLM-5.3-Flash spill v2)",

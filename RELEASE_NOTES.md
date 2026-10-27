@@ -12,6 +12,11 @@ Images:
 
 Changes:
 
+- **Spill v2, step P3: add the dsv41 spill host modules to the DeepSeek V4.1 Flash 1017 image, not wired
+  (recipe `k2a-pb1`).** MiaAI-Lab's rank wire protocol (v2), rank identity, fingerprint and spill state modules
+  (0016/0019), compiled and tested with the family's tests but not called by the engine, so serving is
+  unchanged. World 3 (our tensor parallel 3) is added to the rank split, with new three-rank tests: agreement,
+  a point missing or damaged on one follower aborting with forget on both, and rank versus common fields.
 - **Fix the DeepSeek V4.1 Flash 1017 image build since the spill store.** The store's mutant test requires
   every authored fix to be caught, but the one check that catches `recover_drops_on_io` returns early as root
   (its `chmod 0` cannot simulate a transient read error for root), and the image build runs its CPU checks as
