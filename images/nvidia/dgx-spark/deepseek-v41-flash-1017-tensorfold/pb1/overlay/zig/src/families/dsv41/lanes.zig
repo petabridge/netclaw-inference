@@ -226,6 +226,8 @@ const Lane = struct {
     slot: usize,
     base: usize,
     end: usize,
+    from_snap: u64 = 0, // the kept state this stream's pass resumed from (0: none); retention
+    last_snap: u64 = 0, // the last state this stream kept; retention
     filled: usize = 0, // confirmed prefill positions; observation only
     first: u64 = 0, // the prompt's draw (a handle)
     held: [draft.max_block]u32 = undefined,
@@ -239,7 +241,57 @@ extern "c" fn exp(x: f64) f64;
 /// replay): the slot's own part on the device (Model.snapCopy), and the extent its compressed rows stay in,
 /// [base, base + at), held back from placement while it lives. Stale: a placement needed that room (its restore fails
 /// and the prompt runs from 0).
-pub const Snap = struct { id: u64, at: usize, base: usize, end: usize = 0, buf: cuda.DeviceBuffer, stale: bool = false, complete: bool = false, decoded: bool = false };
+pub const Snap = struct {
+    id: u64,
+    at: usize,
+    base: usize,
+    end: usize = 0,
+    buf: cuda.DeviceBuffer,
+    stale: bool = false,
+    complete: bool = false,
+    decoded: bool = false,
+    // PETABRIDGE (k2a-pb1) retention: how often a prompt pass resumed this state (a conversation's newest state carries
+    // its conversation's count forward), when it was last kept or resumed (retentionTick), and whether a later state of
+    // the same conversation superseded it (a pass that resumed here, or an earlier mark of that pass, kept further on)
+    resumes: u32 = 0,
+    used: u64 = 0,
+    superseded: bool = false,
+};
+
+/// PETABRIDGE (k2a-pb1) retention. Upstream's placeKept gave up kept states oldest first, so an agent's long main
+/// conversation, idle while its subagents and one-shot jobs ran, was always the oldest and always went first
+/// (MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#27). With retention on (TF_DS_RETENTION unset or not "0") the
+/// victim is the least recently used state of the lowest tier: never resumed, then superseded (an older prefix of a
+/// conversation that moved on; a shared prefix that many conversations resume stays recently used), then the resumed
+/// conversations' newest states. Rank 0 alone decides placement (the workers get the base in their frames), so this
+/// changes no frame. Engine thread only.
+var retention_clock: u64 = 0;
+var retention_on: ?bool = null;
+
+fn retentionTick() u64 {
+    retention_clock += 1;
+    return retention_clock;
+}
+
+fn retention() bool {
+    if (retention_on == null) retention_on = if (std.c.getenv("TF_DS_RETENTION")) |v| !std.mem.eql(u8, std.mem.span(v), "0") else true;
+    return retention_on.?;
+}
+
+/// A kept state's retention tier: the lowest goes first.
+fn retentionTier(sn: *const Snap) u2 {
+    if (sn.resumes == 0) return 0;
+    if (sn.superseded) return 1;
+    return 2;
+}
+
+/// Whether `a` goes before `b`: the lower tier, then the least recently used (ties: the caller's oldest-first order).
+fn retentionBefore(a: *const Snap, b: *const Snap) bool {
+    const ta = retentionTier(a);
+    const tb = retentionTier(b);
+    if (ta != tb) return ta < tb;
+    return a.used < b.used;
+}
 
 /// First tokens a handle names (each prompt's draw, read back right after its prefill).
 const ring = 1024;
@@ -513,7 +565,11 @@ pub const Lanes = struct {
         };
         // the rows this stream writes are no other kept state's
         self.staleOver(if (kept != null and !moved) base + kept.?.at else base, base + size, kept);
-        try self.streams.put(gpa, s, .{ .slot = slot, .base = base, .end = base + size });
+        if (kept) |sn| {
+            sn.resumes +|= 1;
+            sn.used = retentionTick();
+        }
+        try self.streams.put(gpa, s, .{ .slot = slot, .base = base, .end = base + size, .from_snap = if (kept) |sn| sn.id else 0 });
         self.used[slot] = true;
         errdefer {
             _ = self.streams.remove(s);
@@ -910,9 +966,7 @@ pub const Lanes = struct {
             kept.clearRetainingCapacity();
             for (self.snaps.items) |sn| if (!sn.stale) try kept.append(gpa, .{ sn.base, sn.at, sn.end });
             if (try placeSoft(gpa, live, kept.items, size, self.m.pool_cap)) |b| return b;
-            const oldest = for (self.snaps.items) |sn| {
-                if (!sn.stale and sn != protected and !clashes(live, sn.base, sn.base + sn.at)) break sn;
-            } else if (protected) |sn| blk: {
+            const oldest = victim(self.snaps.items, live, protected) orelse if (protected) |sn| blk: {
                 // True memory pressure only: give up the source last, then the caller
                 // explicitly falls back to a cold prefill. Never evict it just by age.
                 if (!sn.stale and !clashes(live, sn.base, sn.base + sn.at)) break :blk sn;
@@ -920,6 +974,18 @@ pub const Lanes = struct {
             } else return error.ContextFull;
             oldest.stale = true;
         }
+    }
+
+    /// The kept state placement gives up next, `protected` (a pass's restore source) aside and never one whose rows a
+    /// live stream still owns: by retention order (retention()), else the oldest, as upstream.
+    fn victim(snaps: []const *Snap, live: []const [2]usize, protected: ?*Snap) ?*Snap {
+        var best: ?*Snap = null;
+        for (snaps) |sn| {
+            if (sn.stale or sn == protected or clashes(live, sn.base, sn.base + sn.at)) continue;
+            if (!retention()) return sn;
+            if (best == null or retentionBefore(sn, best.?)) best = sn;
+        }
+        return best;
     }
 
     /// Would the writable tail destroy another retained prefix? In-place growth
@@ -958,6 +1024,16 @@ pub const Lanes = struct {
         errdefer sn.buf.free();
         try self.snaps.append(self.gpa, sn);
         self.next_snap += 1;
+        // retention: the conversation's count carries forward; the state this one grew from (this pass's last keep,
+        // else the state the pass resumed from) is superseded when this one reaches further
+        sn.used = retentionTick();
+        const prior = if (l.last_snap != 0) l.last_snap else l.from_snap;
+        for (self.snaps.items) |o| {
+            if (o == sn) continue;
+            if (o.id == l.from_snap) sn.resumes = @max(sn.resumes, o.resumes);
+            if (o.id == prior and o.at < at) o.superseded = true;
+        }
+        l.last_snap = sn.id;
         if (try self.begin(.snap_save)) {
             try self.wire.int(self.gpa, u64, sn.id);
             try self.wire.int(self.gpa, u32, @intCast(l.slot));
@@ -1244,6 +1320,55 @@ test "prefix growth relocates instead of overwriting a retained neighbour" {
     try std.testing.expectEqual(@as(usize, 12288 + growth_rows), try l.placeKept(&.{}, 10240, &a));
     try std.testing.expect(!a.stale and !b.stale);
     try std.testing.expect(!l.overwritesKept(12288, 22528, &a));
+}
+
+test "retention: placement gives up a never-resumed state before a resumed conversation, whatever their age" {
+    retention_on = true;
+    defer retention_on = null;
+    // main: the oldest, resumed by later turns; one_shot: newer, never resumed
+    var main: Snap = .{ .id = 1, .at = 6144, .base = 0, .buf = undefined, .resumes = 3, .used = 10 };
+    var one_shot: Snap = .{ .id = 2, .at = 6144, .base = 6144, .buf = undefined, .used = 20 };
+    var m: Model = undefined;
+    m.pool_cap = 16384;
+    var l: Lanes = undefined;
+    l.gpa = std.testing.allocator;
+    l.m = &m;
+    l.snaps = .empty;
+    defer l.snaps.deinit(l.gpa);
+    try l.snaps.appendSlice(l.gpa, &.{ &main, &one_shot });
+    // room for 10240 means giving up one of them: the one-shot goes, the older main conversation stays
+    try std.testing.expectEqual(@as(usize, 6144), try l.placeKept(&.{}, 10240, null));
+    try std.testing.expect(!main.stale and one_shot.stale);
+}
+
+test "retention: tiers are never resumed, then superseded, then live conversations, least recently used first in each" {
+    retention_on = true;
+    defer retention_on = null;
+    var head_old: Snap = .{ .id = 1, .at = 2048, .base = 0, .buf = undefined, .resumes = 2, .used = 1 };
+    var shared: Snap = .{ .id = 2, .at = 2048, .base = 2048, .buf = undefined, .resumes = 40, .used = 90, .superseded = true };
+    var prefix: Snap = .{ .id = 3, .at = 2048, .base = 4096, .buf = undefined, .resumes = 1, .used = 5, .superseded = true };
+    var fresh: Snap = .{ .id = 4, .at = 2048, .base = 6144, .buf = undefined, .used = 80 };
+    var stale_one: Snap = .{ .id = 5, .at = 2048, .base = 8192, .buf = undefined, .used = 0, .stale = true };
+    const all = [_]*Snap{ &head_old, &shared, &prefix, &fresh, &stale_one };
+    try std.testing.expectEqual(@as(?*Snap, &fresh), Lanes.victim(&all, &.{}, null));
+    fresh.stale = true;
+    try std.testing.expectEqual(@as(?*Snap, &prefix), Lanes.victim(&all, &.{}, null));
+    prefix.stale = true;
+    try std.testing.expectEqual(@as(?*Snap, &shared), Lanes.victim(&all, &.{}, null));
+    shared.stale = true;
+    try std.testing.expectEqual(@as(?*Snap, &head_old), Lanes.victim(&all, &.{}, null));
+    // never the restore source, nor a state whose rows a live stream owns
+    try std.testing.expectEqual(@as(?*Snap, null), Lanes.victim(&all, &.{}, &head_old));
+    try std.testing.expectEqual(@as(?*Snap, null), Lanes.victim(&all, &.{.{ 0, 4096 }}, null));
+}
+
+test "retention off (TF_DS_RETENTION=0) gives up the oldest, as upstream" {
+    retention_on = false;
+    defer retention_on = null;
+    var main: Snap = .{ .id = 1, .at = 2048, .base = 0, .buf = undefined, .resumes = 9, .used = 50 };
+    var one_shot: Snap = .{ .id = 2, .at = 2048, .base = 2048, .buf = undefined };
+    const all = [_]*Snap{ &main, &one_shot };
+    try std.testing.expectEqual(@as(?*Snap, &main), Lanes.victim(&all, &.{}, null));
 }
 
 test "placement keeps restore source until genuine pool pressure requires cold fallback" {

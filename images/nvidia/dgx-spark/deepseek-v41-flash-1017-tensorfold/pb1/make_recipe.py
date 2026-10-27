@@ -35,6 +35,11 @@ The changes:
       pictures after the resume point
     core/lane_host_reuse_test.zig: the patch's test (a picture resumes its conversation, another picture does not, no
       key neither resumes nor keeps)
+  retention (TF_DS_RETENTION, unset: on; Petabridge, for MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#27)
+    families/dsv41/lanes.zig: placeKept gives up kept states by retention order instead of oldest first: never
+      resumed, then superseded (an older prefix of a conversation that moved on), then resumed conversations' newest
+      states, least recently used first in each; a new state inherits its conversation's resume count. Rank 0 alone
+      decides placement, so no frame changes; TF_DS_RETENTION=0 restores upstream's oldest-first order
 """
 import argparse
 import hashlib

@@ -12,6 +12,13 @@ Images:
 
 Changes:
 
+- **Retain resumed conversations in the DeepSeek V4.1 Flash 1017 image's prompt cache (recipe `k2a-pb1`).**
+  Kept prompt states live in the shared KV pool, and upstream gave up the oldest first when a new stream
+  needed room, so an agent's long main conversation, idle while its subagents ran, always lost its state
+  and re-read up to 268K tokens on its next turn. `placeKept` now gives up the least recently used state
+  of the lowest tier: never resumed, then superseded prefixes, then resumed conversations' newest states.
+  `TF_DS_RETENTION` is on when unset; `0` restores the old order. Petabridge's own change, for
+  MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#27; one overlay (`dsv41/lanes.zig`) changes.
 - **Add an image prompt cache to recipe `k2a-pb1` of the DeepSeek V4.1 Flash 1017 image.** The prompt
   cache finds kept states by token ids, and every picture's positions hold the same placeholder token,
   so a prompt with pictures was never looked up or kept. Every turn of a conversation with an image in
