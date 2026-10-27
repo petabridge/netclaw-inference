@@ -112,4 +112,16 @@ test {
             return rank_identity.gather(gpa, io, o, m, x);
         }
     }.f;
+    // PETABRIDGE (k2a-pb1): the spill state's model side (P4; MiaAI 0016's refs, its tier/lanes/native ones wait for
+    // P5-P6): its methods and the packer over the device planes, compiled although only open's check calls them yet
+    refAll(model.Model.SpillDev);
+    refAll(spill_state.Packer(model.Model.SpillDev));
+    _ = &model.Model.spillLayout;
+    _ = &model.Model.spillGenerations;
+    _ = &model.Model.spillPacker;
+    _ = &model.Model.spillSnapTail;
+    _ = &model.Model.spillClearSnapTail;
+    _ = &model.Model.spillCheckResumed;
+    _ = &model.Model.spillSelfCheck;
+    _ = &model.Model.spillCheckLine;
 }

@@ -12,6 +12,12 @@ Images:
 
 Changes:
 
+- **Spill v2, step P4: the spill state layout against the DeepSeek V4.1 Flash 1017 engine's model (recipe
+  `k2a-pb1`).** MiaAI-Lab 0016's model side (`SpillDev`, the layout and its self-check) in `model.zig`. The
+  small state is our snapshot less its drafter rings and prompt logits, which a pre-replay disk point's replay
+  and final chunk rebuild anyway. At the end of model open, every rank prints one `spill layout: ok|MISMATCH`
+  line, host arithmetic only while spill is off, never failing the start; `TF_DS_SPILL_SELF_CHECK=1` adds a
+  device round trip on the fresh pool. Serving is otherwise unchanged.
 - **Spill v2, step P3: add the dsv41 spill host modules to the DeepSeek V4.1 Flash 1017 image, not wired
   (recipe `k2a-pb1`).** MiaAI-Lab's rank wire protocol (v2), rank identity, fingerprint and spill state modules
   (0016/0019), compiled and tested with the family's tests but not called by the engine, so serving is

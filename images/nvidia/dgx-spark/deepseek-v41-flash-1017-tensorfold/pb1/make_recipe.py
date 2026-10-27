@@ -59,6 +59,13 @@ The changes:
       tests (agreement, a point missing or damaged on one follower aborting with forget on both, rank vs common fields)
     families/dsv41/dsv41.zig: exports the modules and runs their tests with the family's; link.zig: MiaAI 0016's
       bounded reply reads (readable, recvWithin) that rank_wire needs; rank_cache.zig: writeFake made pub for a test
+  spill v2, step P4: the spill state layout against our model (MiaAI-Lab 0016's model side)
+    families/dsv41/model.zig: SpillDev, spillGenerations, spillPacker, spillCheckResumed and spillSelfCheck from 0016;
+      the small state is our Snap less its tail (the drafter rings and prompt logits, which a pre-replay disk point's
+      replay and final chunk rebuild; spillSnapTail, spillClearSnapTail). At the end of Model.open every rank prints
+      one "spill layout: ok|MISMATCH ..." line: host arithmetic only while spill is off, never failing the start
+      (TF_DS_SPILL_SELF_CHECK=1 adds a device round trip on the fresh pool)
+    families/dsv41/dsv41.zig: 0016's compile references for the model side
 """
 import argparse
 import hashlib
