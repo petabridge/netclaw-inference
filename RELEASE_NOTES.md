@@ -12,6 +12,13 @@ Images:
 
 Changes:
 
+- **Spill v2, step P5: the cache tier in the DeepSeek V4.1 Flash 1017 engine's prompt cache and lane host, no tier
+  bound (recipe `k2a-pb1`).** MiaAI-Lab's `0014-core-cache-tier`, hand-merged into k2a's `prompt_cache` and
+  `lane_host`: the tier interface, durable lookup (grid and window rules for disk points only), restore parking
+  and flush at stop. Fitted to k2a: salted requests never reach a tier, every memory drop releases rather than
+  forgets the disk point, and the `--learn` imprint and the tier never share a cut. Nothing binds a tier yet; an
+  independent review confirmed tier-off behaviour is unchanged (its one finding, a counter that only a tier
+  resets, is fixed by counting only while a tier is servicing).
 - **Spill v2, step P4: the spill state layout against the DeepSeek V4.1 Flash 1017 engine's model (recipe
   `k2a-pb1`).** MiaAI-Lab 0016's model side (`SpillDev`, the layout and its self-check) in `model.zig`. The
   small state is our snapshot less its drafter rings and prompt logits, which a pre-replay disk point's replay

@@ -66,6 +66,18 @@ The changes:
       one "spill layout: ok|MISMATCH ..." line: host arithmetic only while spill is off, never failing the start
       (TF_DS_SPILL_SELF_CHECK=1 adds a device round trip on the fresh pool)
     families/dsv41/dsv41.zig: 0016's compile references for the model side
+  spill v2, step P5: the cache tier in k2a's prompt cache and lane host (MiaAI-Lab 0014, by hand), no tier bound
+    core/prompt_cache.zig (k2a's file): prompt_cache.Tier, durable lookup with the grid and window rules (disk points
+      only, so k2a's off-grid memory resumes stay), restore bytes in the budget, chats continued (0111) for each disk
+      point's conversation; salted (namespaced) requests never reach a tier; every memory drop (evictBudget,
+      prune_dead, dead_at_keep, a failed resume) calls Tier.release, only forgetPoint calls Tier.forget; a cut the
+      --learn imprint learns is never written to a tier, a point it holds never restored
+    core/lane_host.zig: restore parking (TF_SPILL_LOAD_MS, TF_SPILL_LOAD_WAIT_MS), polled on the engine thread after
+      the 0005 interleave's rounds; flush at stop; lone-driver pumps counted only while a tier is servicing
+    core/engine_api.zig (k2a's file): 0014's status and request additions
+    core/prompt_cache_fake_tier.zig, prompt_cache_tier_test.zig, lane_host_tier_test.zig (new files): the tip tests,
+      bound to k2a's live/compatible where the tip used usable, 0020's full hook dropped
+    core/spill_p5_k2a_test.zig (new file): a salted request never reaches the tier; drops release, never forget
 """
 import argparse
 import hashlib
@@ -95,6 +107,7 @@ OVERLAYS = {
     "zig/src/families/dsv41/dsv41.zig": "e0be7b5fb7afcd6945eb1512073cc2f4e5d38052e624b1fa1682e20c56086e7a",
     "zig/src/families/dsv41/link.zig": "bd0509c979e4adac66a3705657ed2e6155a35969153da91ce1b26cf91cb3f6ab",
     "zig/src/families/dsv41/rank_cache.zig": "a7e6794e4ecf7c20bcce1bb9effef374382be53794d7578f815b26b458ca529e",
+    "zig/src/core/prompt_cache.zig": "9446351e980bd206837ab625bfa521f51a4bb2f4feac9e79bf6c5a7b4bf936a1",
 }
 # Files k2a-pb1 adds that upstream's tree does not have (their file is overlay/<target path>): each must be absent
 # from k2a.json's source_files, so an upstream that starts shipping one makes this script stop instead of clobbering it.
@@ -111,6 +124,10 @@ NEW_FILES = [
     "zig/src/families/dsv41/rank_identity.zig",
     "zig/src/families/dsv41/rank_wire.zig",
     "zig/src/families/dsv41/spill_state.zig",
+    "zig/src/core/prompt_cache_fake_tier.zig",
+    "zig/src/core/prompt_cache_tier_test.zig",
+    "zig/src/core/lane_host_tier_test.zig",
+    "zig/src/core/spill_p5_k2a_test.zig",
 ]
 
 

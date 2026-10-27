@@ -127,7 +127,7 @@ RUN set -eux; \
 COPY pb1/ /src/pb1/
 RUN set -eux; \
     python3 /src/pb1/make_recipe.py --recipe-root /src/recipe; \
-    echo "123514692e43e2a6ecb172033fc228a1cc8c348aeaa054f111c0dd6fd138999b  /src/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
+    echo "345969a3ddfde2d41f9d1d4e8dc62158c197f51431305a798639ff7b5a781397  /src/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
 # build: applies the k2a-pb1 overlays to source/, runs the CPU checks (zig build test, four zig test runs), builds
 # native + dsv41-tools for aarch64-linux-gnu with the prebuilt kit fatbins, and writes BUILD.json. No network.
 # PETABRIDGE: build.py writes each CPU check's output to /build/built/build-<n>.log and fails the step without
@@ -215,7 +215,7 @@ COPY --from=recipe /src/recipe/tensorfold/variants/recipes/k2a.json /opt/ds41f/r
 RUN echo "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc  /opt/ds41f/recipe/tensorfold/variants/recipes/k2a.json" | sha256sum -c -
 # PETABRIDGE: the recipe this image's BUILD.json names (profiles with build_variant k2a-pb1 select it).
 COPY --from=engine /src/recipe/tensorfold/variants/recipes/k2a-pb1.json /opt/ds41f/recipe/tensorfold/variants/recipes/k2a-pb1.json
-RUN echo "123514692e43e2a6ecb172033fc228a1cc8c348aeaa054f111c0dd6fd138999b  /opt/ds41f/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
+RUN echo "345969a3ddfde2d41f9d1d4e8dc62158c197f51431305a798639ff7b5a781397  /opt/ds41f/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
 
 # RoPE tables for the 10M-position pool, generated on the CPU straight into the kit (5,121,245,184 bytes in
 # four files plus a rewritten rope.json). PETABRIDGE: upstream runs make_rope.py against the extracted kit/;
@@ -265,7 +265,7 @@ LABEL org.opencontainers.image.source="https://github.com/petabridge/netclaw-inf
       io.petabridge.upstream.recipe.build="k2a" \
       io.petabridge.upstream.recipe.manifest.sha256="600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc" \
       io.petabridge.recipe.build="k2a-pb1" \
-      io.petabridge.recipe.manifest.sha256="123514692e43e2a6ecb172033fc228a1cc8c348aeaa054f111c0dd6fd138999b" \
+      io.petabridge.recipe.manifest.sha256="345969a3ddfde2d41f9d1d4e8dc62158c197f51431305a798639ff7b5a781397" \
       io.petabridge.engine="TensorFold (Zig engine: tensorfold-native, tf-dsv41-lanes), frozen fork shipped in the recipe" \
       io.petabridge.engine.source.sha256="8d4b2f808827fd247048082d122b8fab31b75e798b5ed86fd370103ef178469a" \
       io.petabridge.nccl.version="2.30.7-1" \

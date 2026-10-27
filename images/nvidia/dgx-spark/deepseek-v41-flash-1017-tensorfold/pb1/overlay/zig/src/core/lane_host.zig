@@ -1,4 +1,14 @@
 //! The lane core served to the HTTP threads: one thread owns ``core`` and steps rounds while any stream lives.
+//!
+//! PETABRIDGE (k2a-pb1) spill P5: MiaAI-Lab 0014-core-cache-tier, ported by hand onto k2a's host and pb1's 0005/0006.
+//! Pending durable restores and continuation telemetry port wojo's GLM 0110 (PR #124; the scheduler hooks) and 0111
+//! (PR #128). A request may be parked before its prompt pass on a restore job reading a longer kept state from the
+//! prompt cache's tier (shared by every request that wants the same point). Parked requests hold no lane, count as
+//! waiting work and wake back to the front of the queue, where an ordinary lookup runs again. With no tier nothing is
+//! parked, nothing is serviced and nothing else changes. k2a fit: a salted request (cache_namespace) is never parked,
+//! never joins a conversation and never carries a lineage; restore polling runs on the engine thread only: between
+//! rounds in run(), and inside the filling job's Stream.between after the 0005 interleave's rounds (dsv41 joins its
+//! Engram read-ahead before it calls between).
 const std = @import("std");
 const lanes = @import("lanes");
 const api = @import("engine_api.zig");
@@ -57,9 +67,47 @@ pub const LaneHost = struct {
     interleave_ns: i96 = 0,
     filling: ?*Job = null,
     between_err: ?anyerror = null,
+    // PETABRIDGE (k2a-pb1) spill P5: 0014's parked requests (0110). The lists are the engine thread's; changes take the
+    // lock (status reads their lengths). All empty, and `tele` null, unless a tier is set and configure ran.
+    ready: std.ArrayList(*Job) = .empty, // woken: admitted before the queue, in the order they woke
+    loading: std.ArrayList(Load) = .empty, // each waits for a restore job (several may share one)
+    turn: usize = 0, // which restore a service polls first (one budget, shared fairly)
+    lone_commits: u32 = 0, // the lone driver's commits since its last pump
+    tier: TierPolicy = .{},
+    host_counts: HostCounts = .{},
+    /// What status reports under `cache` (published on the engine thread at each noteLive; null until configured).
+    tele: ?api.CacheStats = null,
 
     const Mark = struct { at: i96, tokens: u64 };
     const window_ns: i96 = 2 * std.time.ns_per_s;
+    // PETABRIDGE (k2a-pb1) spill P5: 0014's constants and policy, verbatim.
+    /// How often an idle host polls work in flight (restores, staged writes, deferred retries).
+    const poll_ns: i64 = 2 * std.time.ns_per_ms;
+    /// The lone driver pumps staged writes every this many commits.
+    const lone_pump_commits: u32 = 16;
+
+    const Load = struct { job: *Job, restore: *pc.Restore, since: i96 };
+
+    /// How parked work is serviced (LaneHost.configure; the defaults are off).
+    pub const TierPolicy = struct {
+        /// One elapsed-time budget per service for every restore together, then staged writes (TF_SPILL_LOAD_MS).
+        service_ns: u64 = 40 * std.time.ns_per_ms,
+        /// Staging's share of a service while streams decode (GLM pumped 4 blocks a round); idle, all that is left.
+        pump_ns: u64 = 2 * std.time.ns_per_ms,
+        /// How long a request waits parked on a restore before it is admitted without it (TF_SPILL_LOAD_WAIT_MS).
+        load_wait_ns: i96 = 30 * std.time.ns_per_s,
+        /// A clean shutdown's bound for draining writes (TF_SPILL_FLUSH_MS).
+        flush_ns: u64 = 60 * std.time.ns_per_s,
+    };
+
+    pub const HostCounts = struct {
+        restore_waits: u64 = 0, // requests parked on a restore
+        restore_wait_timeouts: u64 = 0, // of them admitted without it at load_wait_ns
+        restore_wait_ns: u64 = 0,
+        restore_wait_max_ns: u64 = 0,
+        cached_tokens: u64 = 0, // prompt tokens passes resumed (memory or restored)
+        computed_tokens: u64 = 0, // and computed
+    };
 
     const Job = struct {
         host: *LaneHost,
@@ -76,6 +124,12 @@ pub const LaneHost = struct {
         entry: ?*pc.Entry = null, // the kept state the backend restores, until its prompt pass reports
         marks: []const u32 = &.{}, // where the pass keeps states (gpa-owned)
         kept0: u64 = 0, // the store's kept count when the job looked it up
+        // PETABRIDGE (k2a-pb1) spill P5: 0014's job state; all zero or empty for a salted request and without a tier.
+        tried_disk: bool = false, // it waited for a restore once: a later lookup takes what memory has
+        join: pc.Join = .{}, // its conversation (0111)
+        parent: ?u64 = null, // the durable point its pass resumes from, and where
+        fork: u32 = 0,
+        lineage: []pc.Fork = &.{}, // the computation its pass's rows belong to (gpa-owned; Store.passLineage)
 
         /// A completed CUDA event confirms a chunk, without making the engine wait for it.
         fn progress(ptr: *anyopaque, s: *lanes.Stream, at: u32) void {
@@ -101,7 +155,10 @@ pub const LaneHost = struct {
             // picture's positions made from its payload), never by its placeholder tokens; without a key it keeps nothing
             if (!cacheable(job.request)) return;
             const ids = if (job.request.images.len > 0) keyOf(job.request) else s.context.items;
-            if (job.host.cache) |store| _ = store.keepScoped(job.request.cache_namespace, ids, at, s, job.request.chunks);
+            // PETABRIDGE (k2a-pb1) spill P5: 0014's keepWith info (conversation, pictures, lineage) on k2a's scoped keep:
+            // the store hands only un-salted states to the tier; without a tier the info is all zero and changes nothing
+            const info: pc.KeepInfo = .{ .group = job.join.group, .images = job.request.images.len > 0, .parent = job.parent, .fork = job.fork, .lineage = job.lineage };
+            if (job.host.cache) |store| _ = store.keepScopedWith(job.request.cache_namespace, ids, at, s, job.request.chunks, info);
         }
 
         /// Report a restored prefix or its failed copy; an untouched prefix remains kept.
@@ -111,7 +168,19 @@ pub const LaneHost = struct {
             const store = job.host.cache orelse return;
             if (!job.started) return;
             job.stream.reuse.saved = null; // the backend restores before its first chunk; a later keep may free it
-            if (job.stream.reuse_failed) store.resumed(e, keyOf(job.request), false) else if (job.stream.cached == e.at) store.resumed(e, keyOf(job.request), true);
+            // PETABRIDGE (k2a-pb1) spill P5: 0014: a pass that did not compute from that state's rows has a lineage of
+            // its own (only ever non-empty with a tier)
+            const ok = !job.stream.reuse_failed and job.stream.cached == e.at;
+            if (!ok) {
+                job.parent = null;
+                job.fork = 0;
+                if (job.lineage.len > 0) {
+                    const fresh: []pc.Fork = store.passLineage(null) catch &.{};
+                    job.host.gpa.free(job.lineage);
+                    job.lineage = fresh;
+                }
+            }
+            if (job.stream.reuse_failed) store.resumed(e, keyOf(job.request), false) else if (ok) store.resumed(e, keyOf(job.request), true);
         }
     };
 
@@ -136,6 +205,19 @@ pub const LaneHost = struct {
         return .{ .gpa = gpa, .io = io, .core = core, .info_ = enforced, .interleave_ns = ms * std.time.ns_per_ms };
     }
 
+    /// PETABRIDGE (k2a-pb1) spill P5: 0014's configure, verbatim. Nothing calls it in production yet (P6 does, with
+    /// the backend's tier): until then `tele` stays null and status carries no cache counters.
+    /// The tier's switches (before start). Telemetry is published from here on when either is on: a tier on the cache
+    /// (Store.setTier), or grouping.
+    pub fn configure(h: *LaneHost, sp: api.Spill) void {
+        h.tier.service_ns = @as(u64, @max(sp.load_ms, 1)) * std.time.ns_per_ms;
+        h.tier.pump_ns = @min(h.tier.pump_ns, h.tier.service_ns);
+        h.tier.load_wait_ns = @as(i96, @max(sp.load_wait_ms, 1)) * std.time.ns_per_ms;
+        h.tier.flush_ns = @as(u64, sp.flush_ms) * std.time.ns_per_ms;
+        const store_on = if (h.cache) |s| s.tier != null or s.groups else false;
+        h.tele = if (store_on) .{} else null;
+    }
+
     pub fn start(h: *LaneHost) !void {
         h.thread = try std.Thread.spawn(.{ .stack_size = 16 << 20 }, run, .{h});
     }
@@ -153,6 +235,8 @@ pub const LaneHost = struct {
         h.cancels.deinit(h.gpa);
         h.decoded.deinit(h.gpa);
         h.live_tokens.deinit(h.gpa);
+        h.ready.deinit(h.gpa); // PETABRIDGE (k2a-pb1) spill P5: 0014 (empty without a tier)
+        h.loading.deinit(h.gpa);
     }
 
     pub fn engine(h: *LaneHost) Engine {
@@ -164,7 +248,8 @@ pub const LaneHost = struct {
         h.lock();
         defer h.unlock();
         if (h.closing or h.thread == null) return error.Closed;
-        if (h.cache_reset != .idle or h.queued.items.len != 0 or h.admitted.items.len != 0) return error.Busy;
+        // PETABRIDGE (k2a-pb1) spill P5: parked requests are work too (none without a tier)
+        if (h.cache_reset != .idle or h.queued.items.len != 0 or h.admitted.items.len != 0 or h.waitingCount() != 0) return error.Busy;
         h.cache_reset = .pending;
         h.wake.broadcast(h.io);
         while (h.cache_reset == .pending and !h.closing) h.wake.waitUncancelable(h.io, &h.mutex);
@@ -253,7 +338,7 @@ pub const LaneHost = struct {
         @memcpy(stream_tokens[0..n], h.live_tokens.items[0..n]);
         out.* = .{
             .running = @intCast(h.admitted.items.len),
-            .waiting = @intCast(h.queued.items.len),
+            .waiting = @intCast(h.queued.items.len + h.waitingCount()), // PETABRIDGE (k2a-pb1) spill P5: parked ones too (0 without a tier)
             .decode_tokens_per_second = @as(f64, @floatFromInt(tokens)) / 2.0,
             .prefill_tokens_per_second = if (now - h.prefill_at <= window_ns) h.prefill_rate else 0,
             .preemptions = 0,
@@ -262,6 +347,7 @@ pub const LaneHost = struct {
             .token_pool = h.token_pool,
             .prefill_telemetry = h.prefill_telemetry,
             .adaptive = h.adaptive,
+            .cache = h.tele, // PETABRIDGE (k2a-pb1) spill P5: 0014 (null unless configured with a tier)
         };
     }
 
@@ -309,6 +395,7 @@ pub const LaneHost = struct {
     fn finish(h: *LaneHost, job: *Job, reason: Reason, message: []const u8) void {
         job.reported();
         h.gpa.free(job.marks);
+        h.gpa.free(job.lineage); // PETABRIDGE (k2a-pb1) spill P5: 0014 (empty, no allocation, without a tier)
         const s = &job.stream;
         var stats: Stats = if (job.started) .{ .rounds = s.rounds, .drafted = s.drafted, .accepted = s.accepted, .min_rows = s.min_rows, .loop_period = s.loop_period, .loop_novelty = s.loop_novelty, .prefill_seconds = if (job.prefilled) |done| @as(f64, @floatFromInt(@as(i64, @intCast(@max(0, done - job.began))))) / 1e9 else null } else .{};
         if (job.started) for (&stats.depths, s.depths) |*o, d| {
@@ -348,13 +435,35 @@ pub const LaneHost = struct {
         h.cancels.clearRetainingCapacity();
         if (keep) |k| if (std.mem.indexOfScalar(Id, ids, k) != null) h.cancels.append(h.gpa, k) catch {};
         var dropped: std.ArrayList(*Job) = .empty;
+        var unloaded: std.ArrayList(*pc.Restore) = .empty; // PETABRIDGE (k2a-pb1) spill P5: 0014: restores a cancelled job waited for
         for (ids) |id| {
             for (h.queued.items, 0..) |job, i| if (job.id == id) {
                 dropped.append(h.gpa, h.queued.orderedRemove(i)) catch {};
                 break;
             };
+            // PETABRIDGE (k2a-pb1) spill P5: 0014: parked and woken jobs (both lists empty without a tier)
+            for (h.ready.items, 0..) |job, i| if (job.id == id) {
+                dropped.append(h.gpa, h.ready.orderedRemove(i)) catch {};
+                break;
+            };
+            for (h.loading.items, 0..) |l, i| if (l.job.id == id) {
+                _ = h.loading.orderedRemove(i);
+                dropped.append(h.gpa, l.job) catch {};
+                unloaded.append(h.gpa, l.restore) catch {};
+                break;
+            };
         }
         h.mutex.unlock(h.io);
+        // PETABRIDGE (k2a-pb1) spill P5: 0014: a restore no request waits for any more stops (its reads, DMA and
+        // reservations go), exactly once
+        for (unloaded.items, 0..) |r, k| {
+            if (std.mem.indexOfScalar(*pc.Restore, unloaded.items[0..k], r) != null) continue;
+            const wanted = for (h.loading.items) |l| {
+                if (l.restore == r) break true;
+            } else false;
+            if (!wanted) if (h.cache) |store| store.restoreCancel(r);
+        }
+        unloaded.deinit(h.gpa);
         for (dropped.items) |job| h.finish(job, .cancelled, "");
         dropped.deinit(h.gpa);
         for (ids) |id| {
@@ -382,7 +491,8 @@ pub const LaneHost = struct {
     /// Prefills the next queued request into a free lane; false when none waits or no lane is free.
     fn admitOne(h: *LaneHost) bool {
         h.lock();
-        if (h.queued.items.len == 0 or h.admitted.items.len >= h.info_.lanes) {
+        // PETABRIDGE (k2a-pb1) spill P5: 0014: woken jobs are admitted too (none without a tier)
+        if ((h.queued.items.len == 0 and h.ready.items.len == 0) or h.admitted.items.len >= h.info_.lanes) {
             h.unlock();
             return false;
         }
@@ -394,7 +504,14 @@ pub const LaneHost = struct {
             }
             h.full_wait = null;
         }
-        const job = h.queued.orderedRemove(0);
+        // PETABRIDGE (k2a-pb1) spill P5: 0014: woken jobs first, then the queue; with a tier a job may park on a restore
+        // here, before any lane or lookup (parking() is false without a tier: the old path exactly)
+        const job = if (h.ready.items.len > 0) h.ready.orderedRemove(0) else h.queued.orderedRemove(0);
+        if (h.parking()) {
+            h.unlock();
+            if (h.park(job)) return true; // waits for a restore, holding no lane
+            h.lock();
+        }
         h.admitted.append(h.gpa, job) catch {
             h.unlock();
             h.finish(job, .failed, "out of memory");
@@ -409,6 +526,18 @@ pub const LaneHost = struct {
             job.kept0 = store.counts.kept;
             job.marks = l.marks;
             reuse = .{ .saved = if (l.entry) |e| e.saved else null, .at = if (l.entry) |e| e.at else 0, .marks = l.marks, .hook = .{ .ptr = job, .at = Job.kept } };
+            // PETABRIDGE (k2a-pb1) spill P5: 0014: the conversation (0111), the point it resumes and its rows'
+            // lineage, for un-salted requests only (a salted one never reaches the tier). Without a tier: groups is
+            // false, e.point is null and passLineage returns an empty slice without allocating.
+            if (r.cache_namespace == null) {
+                if (store.groups) job.join = store.join(keyOf(r), l.entry, r.images.len == 0 and r.drafts);
+                if (l.entry) |e| {
+                    job.parent = e.point;
+                    job.fork = e.at;
+                }
+                // its rows' computation: the resumed state's forked at its position (written or not), else its own
+                job.lineage = store.passLineage(l.entry) catch &.{};
+            }
         } else |_| {};
         job.proposer = lanes.SuffixLookup.init(h.gpa, .{ .min_match = h.min_match }) catch return h.drop(job, "the drafter could not start");
         job.stream = lanes.Stream.init(h.gpa, .{
@@ -451,7 +580,9 @@ pub const LaneHost = struct {
             h.noteLive();
         }
         if (h.loneFits(job)) return h.runLone(job, began);
-        if (h.interleave_ns > 0 and r.images.len == 0) job.stream.between = .{ .ptr = h, .wanted = betweenWanted, .run = between };
+        // PETABRIDGE (k2a-pb1) spill P5: 0014: between two prompt chunks: the other streams' rounds (0005 interleave),
+        // and parked work's service, which runs with the interleave off too (servicing() is false without a tier)
+        if (r.images.len == 0 and (h.interleave_ns > 0 or h.servicing())) job.stream.between = .{ .ptr = h, .wanted = betweenWanted, .run = between };
         h.filling = job;
         defer h.filling = null;
         h.core.addStream(&job.stream) catch |e| {
@@ -466,38 +597,51 @@ pub const LaneHost = struct {
 
     fn betweenWanted(ptr: *anyopaque) bool {
         const h: *LaneHost = @ptrCast(@alignCast(ptr));
-        return h.core.log == null and h.core.runnableCount() > 0;
+        // PETABRIDGE (k2a-pb1) spill P5: 0014: the interleave's rounds, or parked work in flight. Without a tier
+        // pending() is false and the hook is only set with the interleave on: the 0005 rule exactly.
+        if (h.core.log != null) return false;
+        return (h.interleave_ns > 0 and h.core.runnableCount() > 0) or h.pending();
     }
 
     /// Stream.between: decode rounds for the other live streams, interleave_ns at most, between two of the filling
     /// job's prompt chunks; their tokens go out as they land. Engine thread only (inside the filling job's addStream).
     /// As run() does for a round: cancels first, the learner's clock advanced, then the round and its deliveries.
+    /// PETABRIDGE (k2a-pb1) spill P5: 0014: then parked work's service (restore polls, staged writes), still on the
+    /// engine thread, after the rounds and with dsv41's Engram read-ahead already joined (lanes.zig joins it before it
+    /// calls between): a restore's commands and copies go onto the ordered stream between two chunks, never inside
+    /// one, as a round's do. The filling job reports its resumed entry first, since a restore's room may evict it.
     fn between(ptr: *anyopaque) anyerror!void {
         const h: *LaneHost = @ptrCast(@alignCast(ptr));
         if (h.core.log != null) return; // a step resets the core's arena, which a trail's open events live in
-        const t0 = std.Io.Clock.awake.now(h.io).toNanoseconds();
-        while (true) {
-            h.takeCancelsKeeping(if (h.filling) |f| f.id else null);
-            if (h.core.runnableCount() == 0 or std.Io.Clock.awake.now(h.io).toNanoseconds() - t0 >= h.interleave_ns) break;
-            if (h.core.learner) |l| l.advanceTo(@intCast(std.Io.Clock.awake.now(h.io).toNanoseconds()));
-            h.core.step() catch |e| {
-                h.between_err = e; // the pass fails with it; run() then fails the streams the round held
-                return e;
-            };
-            var i: usize = 0;
-            while (i < h.admitted.items.len) {
-                const job = h.admitted.items[i];
-                if (job == h.filling or job.prefilled == null) {
-                    i += 1;
-                    continue;
+        if (h.interleave_ns > 0) { // PETABRIDGE (k2a-pb1) spill P5: 0014: the 0005 rounds, unchanged, only with the interleave on
+            const t0 = std.Io.Clock.awake.now(h.io).toNanoseconds();
+            while (true) {
+                h.takeCancelsKeeping(if (h.filling) |f| f.id else null);
+                if (h.core.runnableCount() == 0 or std.Io.Clock.awake.now(h.io).toNanoseconds() - t0 >= h.interleave_ns) break;
+                if (h.core.learner) |l| l.advanceTo(@intCast(std.Io.Clock.awake.now(h.io).toNanoseconds()));
+                h.core.step() catch |e| {
+                    h.between_err = e; // the pass fails with it; run() then fails the streams the round held
+                    return e;
+                };
+                var i: usize = 0;
+                while (i < h.admitted.items.len) {
+                    const job = h.admitted.items[i];
+                    if (job == h.filling or job.prefilled == null) {
+                        i += 1;
+                        continue;
+                    }
+                    if (h.deliver(job)) {
+                        h.lock();
+                        _ = h.admitted.orderedRemove(i);
+                        h.unlock();
+                    } else i += 1;
                 }
-                if (h.deliver(job)) {
-                    h.lock();
-                    _ = h.admitted.orderedRemove(i);
-                    h.unlock();
-                } else i += 1;
+                h.noteLive();
             }
-            h.noteLive();
+        }
+        if (h.servicing()) { // PETABRIDGE (k2a-pb1) spill P5: 0014 (false without a tier)
+            if (h.filling) |f| f.reported(); // its restore is done (a chunk ran): a restore's room may evict that entry now
+            h.service(h.tier.service_ns);
         }
     }
 
@@ -518,7 +662,14 @@ pub const LaneHost = struct {
         h.prefill_telemetry.pending = 0;
         h.unlock();
         job.reported();
-        if (h.cache) |store| store.report(job.request.prompt.len, job.stream.cached, store.counts.kept - job.kept0);
+        // PETABRIDGE (k2a-pb1) spill P5: 0014's host counters (published only with telemetry on) and 0111's continued
+        // count (a no-op unless the job joined a conversation, which needs a tier)
+        h.host_counts.cached_tokens += job.stream.cached;
+        h.host_counts.computed_tokens += job.request.prompt.len -| job.stream.cached;
+        if (h.cache) |store| {
+            store.continued(job.join, job.stream.cached, job.request.prompt.len);
+            store.report(job.request.prompt.len, job.stream.cached, store.counts.kept - job.kept0);
+        }
         emit(job, .{ .prefilled = job.stream.cached });
     }
 
@@ -529,7 +680,13 @@ pub const LaneHost = struct {
         if ((r.sampling != null and !lone.sampled) or !r.drafts or r.think_budget > 0 or r.loop_guard or r.call != null or r.structure != null) return false;
         h.lock();
         defer h.unlock();
-        return h.admitted.items.len == 1 and h.queued.items.len == 0 and h.cancels.items.len == 0 and h.core.activeCount() == 0;
+        // PETABRIDGE (k2a-pb1) spill P5: 0014: not while requests are parked (0 without a tier)
+        return h.admitted.items.len == 1 and h.queued.items.len == 0 and h.cancels.items.len == 0 and h.core.activeCount() == 0 and h.waitingCount() == 0;
+    }
+
+    /// PETABRIDGE (k2a-pb1) spill P5: 0014. Requests parked or woken (the lock held).
+    fn waitingCount(h: *const LaneHost) usize {
+        return h.ready.items.len + h.loading.items.len;
     }
 
     /// Send lone-driver tokens as they land; arrivals and cancellation return its stream to the lane core.
@@ -547,12 +704,24 @@ pub const LaneHost = struct {
                 }
                 host.send(j);
                 host.noteLive();
+                // PETABRIDGE (k2a-pb1) spill P5: 0014: writes enqueued at keep are staged during a long lone decode too
+                // (parked work makes it yield); servicing() is false without a tier. Counted only while servicing, so
+                // with no tier the counter is never touched (0014 counted every commit, and a u32 that only a tier
+                // resets would overflow, a ReleaseSafe panic, after 2^32 lone commits); saturating as well.
+                if (host.servicing()) {
+                    host.lone_commits +|= 1;
+                    if (host.lone_commits >= lone_pump_commits) {
+                        host.lone_commits = 0;
+                        if (host.cache) |store| store.pump(host.tier.pump_ns);
+                    }
+                }
             }
             fn yield(ctx: *anyopaque) bool {
                 const host: *LaneHost = @ptrCast(@alignCast(ctx));
                 host.lock();
                 defer host.unlock();
-                return host.queued.items.len > 0 or host.cancels.items.len > 0 or host.closing;
+                // PETABRIDGE (k2a-pb1) spill P5: 0014: parked requests make it yield too (0 without a tier)
+                return host.queued.items.len > 0 or host.cancels.items.len > 0 or host.closing or host.waitingCount() > 0;
             }
         };
         job.began = began;
@@ -602,6 +771,12 @@ pub const LaneHost = struct {
         job.prefilled = null;
         job.delivered = 0;
         job.prefill_sent = false;
+        // PETABRIDGE (k2a-pb1) spill P5: 0014: its next admission looks everything up again (all empty without a tier)
+        job.join = .{};
+        job.parent = null;
+        job.fork = 0;
+        h.gpa.free(job.lineage);
+        job.lineage = &.{};
         h.lock();
         h.queued.insert(h.gpa, 0, job) catch {
             h.unlock();
@@ -631,9 +806,11 @@ pub const LaneHost = struct {
 
     fn noteLive(h: *LaneHost) void {
         const pool = if (h.core.backend.vtable.token_pool) |read| read(h.core.backend.ptr) else null;
+        const tele = h.telemetry(); // PETABRIDGE (k2a-pb1) spill P5: 0014 (null at once while telemetry is off)
         h.lock();
         defer h.unlock();
         h.token_pool = pool;
+        if (tele) |t| h.tele = t; // PETABRIDGE (k2a-pb1) spill P5: 0014
         if (h.core.learner) |l| h.adaptive = .{
             .rounds = l.rounds, .cost_updates = l.cost_updates,
             .acceptance_updates = l.acceptance_updates, .probes = l.probes,
@@ -666,6 +843,9 @@ pub const LaneHost = struct {
             h.takeCancels();
             h.takeCacheReset();
             h.admitBatch();
+            // PETABRIDGE (k2a-pb1) spill P5: 0014: restores, staged writes and deferred retries, between rounds and at
+            // idle (engine thread; servicing() is false without a tier)
+            if (h.servicing()) h.service(h.tier.service_ns);
             if (h.between_err) |e| {
                 h.between_err = null;
                 h.failAll(@errorName(e));
@@ -674,16 +854,22 @@ pub const LaneHost = struct {
             h.noteLive();
             h.lock();
             if (h.closing) {
-                const left = h.queued.items.len + h.admitted.items.len;
+                // PETABRIDGE (k2a-pb1) spill P5: 0014: parked jobs count, and a clean stop flushes the tier (a no-op
+                // without one)
+                const left = h.queued.items.len + h.admitted.items.len + h.waitingCount();
                 h.unlock();
-                if (left == 0) return;
+                if (left == 0) return h.shutdownTier();
                 h.closeAll();
                 continue;
             }
             if (h.core.activeCount() == 0) {
                 if (h.core.learner) |l| l.refresh.idle();
-                if (h.cancels.items.len == 0 and (h.queued.items.len == 0 or h.admitted.items.len >= h.info_.lanes))
-                    h.wake.waitTimeout(h.io, &h.mutex, .{ .duration = .{ .raw = .fromMilliseconds(100), .clock = .awake } }) catch {};
+                // PETABRIDGE (k2a-pb1) spill P5: 0014: woken jobs are admissible; with work in flight (restores, staged
+                // writes, parked jobs: never without a tier) the idle wait polls every 2 ms instead of 100
+                if (h.cancels.items.len == 0 and ((h.queued.items.len == 0 and h.ready.items.len == 0) or h.admitted.items.len >= h.info_.lanes)) {
+                    const ms: i64 = if (h.pending()) poll_ns / std.time.ns_per_ms else 100;
+                    h.wake.waitTimeout(h.io, &h.mutex, .{ .duration = .{ .raw = .fromMilliseconds(ms), .clock = .awake } }) catch {};
+                }
                 h.unlock();
                 continue;
             }
@@ -722,10 +908,224 @@ pub const LaneHost = struct {
         h.lock();
         for (h.queued.items) |job| h.cancels.append(h.gpa, job.id) catch {};
         for (h.admitted.items) |job| h.cancels.append(h.gpa, job.id) catch {};
+        for (h.ready.items) |job| h.cancels.append(h.gpa, job.id) catch {}; // PETABRIDGE (k2a-pb1) spill P5: 0014
+        for (h.loading.items) |l| h.cancels.append(h.gpa, l.job.id) catch {};
         h.unlock();
         h.takeCancels();
     }
+
+    // -- parked work (0110) ---------------------------------------------------------------------------------------
+    // PETABRIDGE (k2a-pb1) spill P5: 0014's parked work, verbatim except where marked. Engine thread only: park runs
+    // in admitOne, service in run() between rounds and inside the filling job's between (after the 0005 rounds),
+    // expireLoads and restoreEnded inside service. Every list change takes the lock; the store and the tier are the
+    // engine thread's alone.
+
+    /// Whether admission may park a request: the cache has a tier.
+    fn parking(h: *const LaneHost) bool {
+        const store = h.cache orelse return false;
+        return store.tier != null;
+    }
+
+    /// Whether the engine thread services parked work (restores, staged writes, deferred retries).
+    fn servicing(h: *const LaneHost) bool {
+        return h.parking();
+    }
+
+    /// Work in flight the host must poll (engine thread): restores, writes to stage, requests parked or woken.
+    fn pending(h: *const LaneHost) bool {
+        if (h.loading.items.len > 0 or h.ready.items.len > 0) return true;
+        const store = h.cache orelse return false;
+        return store.busy();
+    }
+
+    /// Before `job`'s pass (engine thread, no lock): park it on a restore of a longer durable point (once). False:
+    /// admit it now.
+    fn park(h: *LaneHost, job: *Job) bool {
+        const store = h.cache orelse return false;
+        const r = job.request;
+        if (!cacheable(r)) return false;
+        // PETABRIDGE (k2a-pb1) spill P5: v1 tiers un-salted requests only: a salted one stays memory-only, never asking
+        // the tier (k2a's namespaces: its states and lookups never leave their namespace)
+        if (r.cache_namespace != null) return false;
+        const key = keyOf(r);
+        const now = std.Io.Clock.awake.now(h.io).toNanoseconds();
+        const probe = store.probe(key, r.chunks);
+        if (!job.tried_disk) if (probe.durable) |p| {
+            job.tried_disk = true;
+            h.lock();
+            const room = h.loading.ensureUnusedCapacity(h.gpa, 1);
+            h.unlock();
+            if (room) |_| {
+                if (store.restoreBegin(p, key)) |rs| {
+                    h.lock();
+                    h.loading.appendAssumeCapacity(.{ .job = job, .restore = rs, .since = now });
+                    h.unlock();
+                    h.host_counts.restore_waits += 1;
+                    return true;
+                } else |err| note("reading {d} kept tokens from disk did not start ({s}); prefilling", .{ p.at, @errorName(err) });
+            } else |_| {}
+        };
+        return false;
+    }
+
+    /// A woken job to the ready list (the lock held; released here). Out of memory fails it alone.
+    fn toReady(h: *LaneHost, job: *Job) void {
+        h.ready.append(h.gpa, job) catch {
+            h.unlock();
+            return h.finish(job, .failed, "out of memory");
+        };
+        h.unlock();
+    }
+
+    /// Parked work's service (engine thread): restores progress under one elapsed-time budget shared fairly (each gets
+    /// an equal share of what is left, a different one first each time); writes are staged with what remains. Restores
+    /// that end wake every request waiting for them; deferred restores whose retry came ask again.
+    /// Called inside a fill's `between` too, so a family's restore commands there must keep the follower's ordered
+    /// stream valid (dsv41 joins Engram read-ahead before `between`, as recipe 0005 requires).
+    fn service(h: *LaneHost, budget_ns: u64) void {
+        const store = h.cache orelse return;
+        const t0 = std.Io.Clock.awake.now(h.io).toNanoseconds();
+        h.expireLoads(t0);
+        const n = store.restoring.items.len;
+        if (n > 0) { // at most 64 a service, a different first one each time: every restore is polled in turn
+            var buf: [64]*pc.Restore = undefined;
+            const m = @min(n, buf.len);
+            h.turn = (h.turn + 1) % n;
+            for (0..m) |k| buf[k] = store.restoring.items[(h.turn + k) % n];
+            for (buf[0..m], 0..) |r, k| {
+                const spent: u64 = @intCast(@max(0, std.Io.Clock.awake.now(h.io).toNanoseconds() - t0));
+                if (spent >= budget_ns and k > 0) break;
+                const share = (budget_ns -| spent) / (m - k);
+                const st = store.restorePoll(r, share);
+                if (st != .pending) h.restoreEnded(r);
+            }
+        }
+        const spent: u64 = @intCast(@max(0, std.Io.Clock.awake.now(h.io).toNanoseconds() - t0));
+        const idle = h.filling == null and h.core.activeCount() == 0; // nothing decodes: staging takes what is left
+        store.pump(if (idle) budget_ns -| spent else @min(budget_ns -| spent, h.tier.pump_ns));
+    }
+
+    /// Requests parked on a restore longer than load_wait_ns are admitted without it (they look up what memory holds);
+    /// a restore no request waits for any more stops, once.
+    fn expireLoads(h: *LaneHost, now: i96) void {
+        const store = h.cache orelse return;
+        var any = false;
+        var i: usize = 0;
+        while (i < h.loading.items.len) {
+            const l = h.loading.items[i];
+            if (now - l.since < h.tier.load_wait_ns) {
+                i += 1;
+                continue;
+            }
+            any = true;
+            h.lock();
+            _ = h.loading.orderedRemove(i);
+            const waited: u64 = @intCast(@max(0, now - l.since));
+            h.host_counts.restore_wait_timeouts += 1;
+            h.host_counts.restore_wait_ns += waited;
+            h.host_counts.restore_wait_max_ns = @max(h.host_counts.restore_wait_max_ns, waited);
+            h.toReady(l.job); // (releases the lock)
+            const wanted = for (h.loading.items) |o| {
+                if (o.restore == l.restore) break true;
+            } else false;
+            if (!wanted) store.restoreCancel(l.restore);
+        }
+        if (!any) return;
+        h.lock();
+        h.wake.signal(h.io);
+        h.unlock();
+    }
+
+    /// Restore `r` ended (adopted, dropped or failed; `r` is already freed, only its address is compared): its
+    /// waiters wake in arrival order, to look up what memory holds now.
+    fn restoreEnded(h: *LaneHost, r: *pc.Restore) void {
+        const now = std.Io.Clock.awake.now(h.io).toNanoseconds();
+        while (true) {
+            h.lock();
+            const i = for (h.loading.items, 0..) |l, i| {
+                if (l.restore == r) break i;
+            } else {
+                h.wake.signal(h.io);
+                return h.unlock();
+            };
+            const l = h.loading.orderedRemove(i);
+            const waited: u64 = @intCast(@max(0, now - l.since));
+            h.host_counts.restore_wait_ns += waited;
+            h.host_counts.restore_wait_max_ns = @max(h.host_counts.restore_wait_max_ns, waited);
+            h.toReady(l.job);
+        }
+    }
+
+    /// Clean shutdown on the engine thread, nothing left to serve: restores stopped, writes drained within flush_ns.
+    fn shutdownTier(h: *LaneHost) void {
+        const store = h.cache orelse return;
+        if (store.tier == null) return;
+        _ = store.flush(h.tier.flush_ns);
+        if (h.telemetry()) |t| {
+            h.lock();
+            h.tele = t;
+            h.unlock();
+        }
+    }
+
+    /// The cache's counters for status (engine thread); null while telemetry is off.
+    fn telemetry(h: *LaneHost) ?api.CacheStats {
+        if (h.tele == null) return null;
+        var t: api.CacheStats = .{};
+        if (h.cache) |store| {
+            const c = store.counts;
+            const s = store.stats;
+            t.memory_hits = c.hits;
+            t.memory_misses = c.misses;
+            t.kept = c.kept;
+            t.evicted = c.evicted;
+            t.refused = c.refused;
+            t.failed = c.failed;
+            t.entries = store.entries.items.len;
+            t.held_bytes = store.held;
+            t.disk_lookups = s.disk_lookups;
+            t.disk_hits = s.disk_hits;
+            t.disk_hits_committed = s.disk_hits_committed;
+            t.restores_begun = s.restores_begun;
+            t.restores_shared = s.restores_shared;
+            t.restores_failed = s.restores_failed;
+            t.restores_cancelled = s.restores_cancelled;
+            t.restores_dropped = s.restores_dropped;
+            t.restores_refused = s.restores_refused;
+            t.restores_active = store.restoring.items.len;
+            t.restoring_bytes = store.restoring_bytes;
+            for (store.restoring.items) |r| {
+                t.restore_blocks_done += r.done;
+                t.restore_blocks_total += r.total;
+            }
+            t.restored_tokens = s.restored_tokens;
+            t.writes_enqueued = s.writes_enqueued;
+            t.shared_promoted = s.shared_promoted;
+            t.flushes = s.flushes;
+            t.flush_timeouts = s.flush_timeouts;
+            t.flush_unpublished = s.flush_unpublished;
+            t.chats_continued = s.chats_continued;
+            t.chats_continued_prefill_tokens = s.chats_continued_prefill_tokens;
+            t.spill = store.tierCounts();
+        }
+        const hc = h.host_counts;
+        t.restore_waits = hc.restore_waits;
+        t.restore_wait_timeouts = hc.restore_wait_timeouts;
+        t.restore_wait_ns = hc.restore_wait_ns;
+        t.restore_wait_max_ns = hc.restore_wait_max_ns;
+        t.cached_tokens = hc.cached_tokens;
+        t.computed_tokens = hc.computed_tokens;
+        t.parked = h.loading.items.len;
+        return t;
+    }
 };
+
+/// PETABRIDGE (k2a-pb1) spill P5: 0014's note. A line on the engine's log; tests stay quiet (the build runner fails a
+/// test that writes to stderr). Only park writes one, and only with a tier.
+fn note(comptime fmt: []const u8, args: anytype) void {
+    if (@import("builtin").is_test) return;
+    std.log.warn("lane host: " ++ fmt, args);
+}
 
 test "cache reset drops snapshots on engine thread and refuses overlapping work" {
     const gpa = std.testing.allocator;
@@ -896,6 +1296,7 @@ test "a lane host serves the core's own tokens, in order, and cancels between ro
 
 test {
     _ = @import("lane_host_test.zig");
+    _ = @import("lane_host_tier_test.zig"); // PETABRIDGE (k2a-pb1) spill P5: 0014
 }
 
 test "prefill counters are available before generated reply completion" {

@@ -63,12 +63,12 @@
     },
     "k2a_source_tree_sha256": "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade",
     "k2a_pb1": {
-      "note": "Petabridge's recipe: k2a plus 37 overlays and 12 new files (the inert spill store under zig/src/core/spill/ and the unwired dsv41 spill host modules) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
+      "note": "Petabridge's recipe: k2a plus 38 overlays and 16 new files (the inert spill store under zig/src/core/spill/ and the unwired dsv41 spill host modules) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "123514692e43e2a6ecb172033fc228a1cc8c348aeaa054f111c0dd6fd138999b"
+        "sha256": "345969a3ddfde2d41f9d1d4e8dc62158c197f51431305a798639ff7b5a781397"
       },
-      "source_tree_sha256": "83abc70e69cacc118b528b7b04b6f85c9f5bc1c30dc59f36059bf177bfac5617",
+      "source_tree_sha256": "819ed3794bf0d31a38107d4429b751ac79e0f178a3b71bf2c2f1cccc25df3cd2",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -84,7 +84,7 @@
         },
         "zig/src/core/lane_host.zig": {
           "file": "pb1/overlay/zig/src/core/lane_host.zig",
-          "sha256": "9764ae266b71b64b366c17ba53ccee779f7b8fabf2c60a5281bccf049e8c5997",
+          "sha256": "29b57718a912b699a7ceed2240d50aeac3ab72a2468750b4db333592bda54f2b",
           "replaces_base_sha256": "63a04d2285d41d23de7179ba66fd1f9943618f78636c679307e4fb6d9d8c185d"
         },
         "zig/src/core/lanes/engine.zig": {
@@ -114,7 +114,7 @@
         },
         "zig/src/core/engine_api.zig": {
           "file": "pb1/overlay/zig/src/core/engine_api.zig",
-          "sha256": "1630eeb4670bd50c524536fd3d2ee99a25d46d8471ad6ceaa7336e74268c85a6",
+          "sha256": "4154d7f0b7adffbe782a58a0ea11a12c5fa8cdffc7231f6b11ebda7424298e41",
           "replaces_base_sha256": "198ec7a4b25bf13a62c55e70116c4112e79cf326e21a55525250280926a4c925"
         },
         "zig/src/core/lane_host_reuse_test.zig": {
@@ -151,6 +151,11 @@
           "file": "pb1/overlay/zig/src/families/dsv41/rank_cache.zig",
           "sha256": "4da4d5b943785bcb9d9f821bc33cd6f417016c309e07f0532a4754404160f2ea",
           "replaces_base_sha256": "a7e6794e4ecf7c20bcce1bb9effef374382be53794d7578f815b26b458ca529e"
+        },
+        "zig/src/core/prompt_cache.zig": {
+          "file": "pb1/overlay/zig/src/core/prompt_cache.zig",
+          "sha256": "b1156b050497872d0d432a4aa936b1e11c9ab5ff6b7b17866f25e5fc2065b601",
+          "replaces_base_sha256": "9446351e980bd206837ab625bfa521f51a4bb2f4feac9e79bf6c5a7b4bf936a1"
         }
       },
       "new_files": {
@@ -165,15 +170,24 @@
         "zig/src/families/dsv41/parts.zig": { "file": "pb1/overlay/zig/src/families/dsv41/parts.zig", "sha256": "80d9afcaad39495ef66b82ac00671207d7d3b5bdc15e081474c20d674232e36b" },
         "zig/src/families/dsv41/rank_identity.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_identity.zig", "sha256": "d163462522dde8f52cf42f022cd24398f99013ceacc1c33810c4428f45ad2a81" },
         "zig/src/families/dsv41/rank_wire.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_wire.zig", "sha256": "13ae9adce37770258855019d85f22426504af6e2e84c24efa47658a28f887939" },
-        "zig/src/families/dsv41/spill_state.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_state.zig", "sha256": "12a331a70ddc0a23830f5653e8a3fe4e2a8aa938f54d5c7e2e2f84b0cff5d148" }
+        "zig/src/families/dsv41/spill_state.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_state.zig", "sha256": "12a331a70ddc0a23830f5653e8a3fe4e2a8aa938f54d5c7e2e2f84b0cff5d148" },
+        "zig/src/core/prompt_cache_fake_tier.zig": { "file": "pb1/overlay/zig/src/core/prompt_cache_fake_tier.zig", "sha256": "440ca6be4560fb0f037745c1953e245451c2cd48d64850d36603e3de031a65bd" },
+        "zig/src/core/prompt_cache_tier_test.zig": { "file": "pb1/overlay/zig/src/core/prompt_cache_tier_test.zig", "sha256": "d1b44dae701de13191672c99234f74dded4d53354908b67c8a14801e4abb13fe" },
+        "zig/src/core/lane_host_tier_test.zig": { "file": "pb1/overlay/zig/src/core/lane_host_tier_test.zig", "sha256": "5d385d3c94845114c371bdcc7309a6095fe69dddd6647ee1bdc57787b13febdb" },
+        "zig/src/core/spill_p5_k2a_test.zig": { "file": "pb1/overlay/zig/src/core/spill_p5_k2a_test.zig", "sha256": "32076bb218f7ecdfe6a0f2348ee460882029d74b7ecf0ec0406236b3b2a56ee6" }
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "a1bf1ba6bce6e0f2de056f5dada94ba84b024912219a48277de780a2bfde77fe"
+        "sha256": "b46183dd300151a522ce59c8781926874b299e8355b38312a0baaee8bf24ce69"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
       "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
       "ported_patches": [
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0014-core-cache-tier.patch",
+          "author": "MiaAI-Lab",
+          "note": "spill v2 step P5: the cache tier hand-merged into k2a's prompt_cache and lane_host, no tier bound; salted requests never reach a tier, memory drops release (never forget), the --learn imprint and the tier never share a cut"
+        },
         {
           "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0016-dsv41-spill-blocks.patch",
           "author": "MiaAI-Lab",
