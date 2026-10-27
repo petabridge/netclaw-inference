@@ -130,8 +130,12 @@ RUN set -eux; \
     echo "024e155729ec88ce8217bb1d2c321bc70b95f109be98473b261de7975322f0ae  /src/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
 # build: applies the k2a-pb1 overlays to source/, runs the CPU checks (zig build test, four zig test runs), builds
 # native + dsv41-tools for aarch64-linux-gnu with the prebuilt kit fatbins, and writes BUILD.json. No network.
-RUN cd /src/recipe && python3 tensorfold/variants/build.py build --recipe k2a-pb1 \
-      --build-root /build/ds41f --out /build/built --zig /opt/zig/zig
+# PETABRIDGE: build.py writes each CPU check's output to /build/built/build-<n>.log and fails the step without
+# printing it, so a failed check is invisible in CI; on failure, print the tail of each log (the RDMA mock's
+# per-rank lines dropped) and fail as before.
+RUN cd /src/recipe && { python3 tensorfold/variants/build.py build --recipe k2a-pb1 \
+      --build-root /build/ds41f --out /build/built --zig /opt/zig/zig \
+    || { for f in /build/built/build-*.log; do echo "== $f"; grep -v '^RDMA rank' "$f" | tail -150; done; exit 1; }; }
 # install: re-verifies BUILD.json against the recipe and copies the two binaries and BUILD.json to
 # <runtime>/bin-1.2.5 (profile 1.2.5-pb1: profile 1.2.5 with build_variant k2a-pb1, same binary_subdir). The
 # binaries are not stripped or touched afterwards.
