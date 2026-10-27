@@ -12,6 +12,11 @@ Images:
 
 Changes:
 
+- **Fix the DeepSeek V4.1 Flash 1017 image build since the spill store.** The store's mutant test requires
+  every authored fix to be caught, but the one check that catches `recover_drops_on_io` returns early as root
+  (its `chmod 0` cannot simulate a transient read error for root), and the image build runs its CPU checks as
+  root, so the mutant "survived" and `zig build test` failed on every build. As root the mutant test now skips
+  that mutant; the engine also runs as root, where that permission path cannot occur.
 - **Print the DeepSeek V4.1 Flash 1017 engine's CPU check logs when one fails.** `build.py` writes each check's
   output (`zig build test` and the four `zig test` runs) to `/build/built/build-<n>.log` and only raises, so a
   failing check showed nothing in CI. The engine stage now prints the tail of each log on failure (the RDMA

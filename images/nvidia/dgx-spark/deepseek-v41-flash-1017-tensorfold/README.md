@@ -184,7 +184,7 @@ Spill v2 (prompt states on each Spark's local NVMe, MiaAI-Lab's port of wojo's G
 (33 overlays: k2a has 27; the two `tool_parse` files, `fake.zig`, `model.zig`, `prompt.zig` and `lane_host_reuse_test.zig` are new targets, and `lane_host.zig`, `engine.zig`, `stream.zig`, `dsv41/lanes.zig`, `engine_api.zig` and `chat.zig` replace k2a's own overlays of those files) and `profiles/1.2.5-pb1.json` (profile 1.2.5 with `build_variant: "k2a-pb1"`,
 used only by `build.py install`). It refuses to run unless `k2a.json` is the pinned upstream file (`600c83c8...`)
 and each replaced file is still the one it was written against (upstream's base, or k2a's own overlay), so a new upstream commit cannot silently
-drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `024e1557...`. The image
+drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `d2e44a1a...`. The image
 carries both `recipes/k2a.json` and `recipes/k2a-pb1.json`.
 
 Upstream report: [MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67).
