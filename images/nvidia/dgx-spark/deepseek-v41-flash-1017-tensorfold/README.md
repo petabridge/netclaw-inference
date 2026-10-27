@@ -178,11 +178,13 @@ Retention is Petabridge's own change, for MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-
 
 The stale Engram read-ahead fix is Petabridge's too. MiaAI-Lab's 0005 made `fillChunk` reuse a read-ahead that was already joined when its `start` and `n` match. A pass that ends early, from a cancel between chunks or the interleave's error path, leaves that state set, and `fillBegin` did not clear it. So the next pass whose first chunk started at the same position, a resume there, took the other prompt's Engram rows for one chunk, silently. `fillBegin` now joins and clears it on every rank.
 
+Spill v2 (prompt states on each Spark's local NVMe, MiaAI-Lab's port of wojo's GLM-5.3-Flash work) is being ported in inert steps, each built and tested before the next; nothing writes to disk until a later step enables it through a profile. Step P2 adds the block store (`0013-core-spill-store`) verbatim as seven new files under `zig/src/core/spill/` (listed in `make_recipe.py`'s `NEW_FILES`, which must stay absent from upstream's tree), plus its export from `core/root.zig`. Its two simulated short O_DIRECT write tests skip their direct variant where Linux refuses an unaligned O_DIRECT `pwrite`.
+
 `pb1/make_recipe.py` runs in the `engine` stage and writes the overlay objects, `variants/recipes/k2a-pb1.json`
 (33 overlays: k2a has 27; the two `tool_parse` files, `fake.zig`, `model.zig`, `prompt.zig` and `lane_host_reuse_test.zig` are new targets, and `lane_host.zig`, `engine.zig`, `stream.zig`, `dsv41/lanes.zig`, `engine_api.zig` and `chat.zig` replace k2a's own overlays of those files) and `profiles/1.2.5-pb1.json` (profile 1.2.5 with `build_variant: "k2a-pb1"`,
 used only by `build.py install`). It refuses to run unless `k2a.json` is the pinned upstream file (`600c83c8...`)
 and each replaced file is still the one it was written against (upstream's base, or k2a's own overlay), so a new upstream commit cannot silently
-drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `c622a223...`. The image
+drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `024e1557...`. The image
 carries both `recipes/k2a.json` and `recipes/k2a-pb1.json`.
 
 Upstream report: [MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67).
