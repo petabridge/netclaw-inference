@@ -66,9 +66,9 @@
       "note": "Petabridge's recipe: k2a plus 34 overlays and 7 new files (the inert spill store under zig/src/core/spill/) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "024e155729ec88ce8217bb1d2c321bc70b95f109be98473b261de7975322f0ae"
+        "sha256": "d2e44a1a765279548a467c5f0eeac76832a14ae7ff3e071185009b111817f58d"
       },
-      "source_tree_sha256": "172d9f7b0cab7e16bc30fe996ed26d0cac8b76eed78ad3abdc444f7e03475243",
+      "source_tree_sha256": "9f1e8c65c31d7c96a25faa1557702b99e71945872cfb28f8bb3a62e14ca291dd",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -145,7 +145,7 @@
         "zig/src/core/spill/root.zig": { "file": "pb1/overlay/zig/src/core/spill/root.zig", "sha256": "b61e88b8407693965c62615464cb595e4867f10db005b9f1b7974fa01dc00fc4" },
         "zig/src/core/spill/slots.zig": { "file": "pb1/overlay/zig/src/core/spill/slots.zig", "sha256": "a90b9afb856f6a47b05e95ce20b6bccfe52288a6a9daef5b8705976548f04316" },
         "zig/src/core/spill/store.zig": { "file": "pb1/overlay/zig/src/core/spill/store.zig", "sha256": "8841edca1da954102c5df0be62a3bd693ef8e1416e1f83754924088d7bc8db16" },
-        "zig/src/core/spill/store_test.zig": { "file": "pb1/overlay/zig/src/core/spill/store_test.zig", "sha256": "0b9a33772b0ff7fb6c7d3968db0935358cc139f66ed7663fd72b7272f810858e" }
+        "zig/src/core/spill/store_test.zig": { "file": "pb1/overlay/zig/src/core/spill/store_test.zig", "sha256": "c02e27d20b2aa48fc6c2632f50de6241a9a011b93890d26cde02c6f637fa58f4" }
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
