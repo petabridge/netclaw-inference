@@ -44,6 +44,12 @@ The changes:
     families/dsv41/model.zig: fillBegin clears a read-ahead the previous pass left joined (a pass that ended early
       between chunks), so 0005's joined-read-ahead reuse can never hand another prompt's Engram rows to this pass's
       first chunk
+  spill v2, step P2: the disk block store, inert (MiaAI-Lab zig/patches/0013-core-spill-store.patch, from wojo's GLM
+  0088/0110 store; nothing opens a store until a later step wires it)
+    core/spill/{format,fsio,mutants,root,slots,store,store_test}.zig (new files) and core/root.zig (the export):
+      verbatim, except two tests (fsio's partial direct write, store_test's write faults): their simulated short
+      write is a real unaligned pwrite on an O_DIRECT descriptor, which Linux refuses on ext4, so the direct
+      variant skips where the kernel refuses the simulation; the buffered variants still run
 """
 import argparse
 import hashlib
@@ -69,7 +75,19 @@ OVERLAYS = {
     "zig/src/core/lane_host_reuse_test.zig": "69adf37d7fe392f34e24e7be0e6ca4bced32fcb41bdbb3f91cc72da928b17d9a",
     "zig/src/server/prompt.zig": "9a3f360224a1b0f0d19d07b070652b09776fbbcb294587ae305818a89eb93798",
     "zig/src/server/chat.zig": "f96ab77e5d3013249cc312940489f74d9f99e1325a13e85dd691ab25e0321914",
+    "zig/src/core/root.zig": "ffcf279a324ad3a236fdb6aac3aed63ce295aa02dcd0037fc86d922dd19e5917",
 }
+# Files k2a-pb1 adds that upstream's tree does not have (their file is overlay/<target path>): each must be absent
+# from k2a.json's source_files, so an upstream that starts shipping one makes this script stop instead of clobbering it.
+NEW_FILES = [
+    "zig/src/core/spill/format.zig",
+    "zig/src/core/spill/fsio.zig",
+    "zig/src/core/spill/mutants.zig",
+    "zig/src/core/spill/root.zig",
+    "zig/src/core/spill/slots.zig",
+    "zig/src/core/spill/store.zig",
+    "zig/src/core/spill/store_test.zig",
+]
 
 
 def digest(data):
@@ -90,11 +108,25 @@ def main():
     if digest(raw) != K2A_JSON_SHA256:
         sys.exit("recipes/k2a.json is not the pinned upstream file; review make_recipe.py")
     spec = json.loads(raw)
+    listed = set(OVERLAYS) | set(NEW_FILES)
+    if len(listed) != len(OVERLAYS) + len(NEW_FILES):
+        sys.exit("a target is in both OVERLAYS and NEW_FILES")
+    present = {p.relative_to(HERE / "overlay").as_posix() for p in (HERE / "overlay").rglob("*") if p.is_file()}
+    if present != listed:
+        sys.exit(f"overlay/ and the lists disagree: unlisted {sorted(present - listed)}, missing {sorted(listed - present)}")
     for target, replaced_sha in OVERLAYS.items():
         if spec["source_files"].get(target) != replaced_sha:
             sys.exit(f"{target} is no longer the file this patch was written against; rebase the k2a-pb1 patch")
         if target in spec["overlays"] and spec["overlays"][target]["sha256"] != replaced_sha:
             sys.exit(f"k2a's overlay of {target} is not the one this patch was written against")
+        data = (HERE / "overlay" / target).read_bytes()
+        sha = digest(data)
+        (variants / "objects" / f"{sha}.zig").write_bytes(data)
+        spec["overlays"][target] = {"object": f"objects/{sha}.zig", "sha256": sha}
+        spec["source_files"][target] = sha
+    for target in NEW_FILES:
+        if target in spec["source_files"]:
+            sys.exit(f"upstream now has {target}; move it from NEW_FILES to OVERLAYS with its sha256 and rebase")
         data = (HERE / "overlay" / target).read_bytes()
         sha = digest(data)
         (variants / "objects" / f"{sha}.zig").write_bytes(data)
@@ -109,6 +141,7 @@ def main():
         "base_recipe": "k2a",
         "base_recipe_sha256": K2A_JSON_SHA256,
         "overlays": sorted(OVERLAYS),
+        "new_files": sorted(NEW_FILES),
         "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
         "ported_patches": [
             "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0005-prefill-interleave.patch",

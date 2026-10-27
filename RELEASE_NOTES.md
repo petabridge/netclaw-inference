@@ -12,6 +12,12 @@ Images:
 
 Changes:
 
+- **Spill v2, step P2: add the disk block store to the DeepSeek V4.1 Flash 1017 image, inert (recipe `k2a-pb1`).**
+  The first step of porting MiaAI-Lab's spill-to-disk prompt cache (`0013-core-spill-store`) onto the TP3
+  K2a engine: seven new files under `zig/src/core/spill/` and their export, verbatim. Nothing opens a store
+  yet, so serving is unchanged. Two of its tests simulate a short write with a real unaligned `pwrite` on an
+  O_DIRECT descriptor, which Linux refuses on ext4; their direct variant now skips where the kernel refuses
+  the simulation. `make_recipe.py` gains `NEW_FILES` for overlay files upstream does not have.
 - **Fix a stale Engram read-ahead in the DeepSeek V4.1 Flash 1017 image (recipe `k2a-pb1`).** The prefill
   interleave port (MiaAI-Lab 0005) lets `fillChunk` reuse an already-joined read-ahead with a matching
   `start` and `n`. A pass that ended early between chunks left that state set, so a later pass whose
