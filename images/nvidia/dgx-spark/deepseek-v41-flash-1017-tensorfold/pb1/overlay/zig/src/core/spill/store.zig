@@ -616,6 +616,7 @@ pub const Store = struct {
             var names = try fsio.list(gpa, s.blocks_fd);
             defer fsio.freeList(gpa, &names);
             for (names.items) |n| {
+                s.scanned(n); // PETABRIDGE (k2a-pb1) spill P6: 0019
                 const d = if (std.mem.endsWith(u8, n, ".blk")) format.parseHex(n[0 .. n.len - 4]) else null;
                 if (d == null) {
                     fsio.unlinkAt(s.blocks_fd, n);
@@ -632,6 +633,7 @@ pub const Store = struct {
         var names = try fsio.list(gpa, s.points_fd);
         defer fsio.freeList(gpa, &names);
         for (names.items) |n| {
+            s.scanned(n); // PETABRIDGE (k2a-pb1) spill P6: 0019
             if (!std.mem.endsWith(u8, n, ".man")) continue;
             const key = format.parseHex(n[0 .. n.len - 4]) orelse continue;
             const p = s.recover(key, &present, &unsure) catch |e| switch (e) {
@@ -689,6 +691,13 @@ pub const Store = struct {
         for (order.items) |p| try s.parent.put(gpa, p.key, s.parentOf(p));
         s.clock = 0;
         for (order.items) |p| s.clock = @max(s.clock, p.used);
+    }
+
+    /// One name the scan read: counted for a watcher on another thread (Hooks.progress), and the test's hook.
+    /// PETABRIDGE (k2a-pb1) spill P6: MiaAI-Lab 0019, verbatim.
+    fn scanned(s: *Store, name: []const u8) void {
+        if (s.hooks.progress) |p| _ = p.fetchAdd(1, .monotonic);
+        if (s.hooks.scanned) |f| f(s.hooks.ctx, name);
     }
 
     fn recover(s: *Store, key: Digest, present: *const std.AutoHashMapUnmanaged(Digest, fsio.Stat), unsure: *const std.AutoHashMapUnmanaged(Digest, void)) !*Point {
@@ -2440,6 +2449,8 @@ pub const Store = struct {
                     r.state[i] = .ready;
                 } else |e| {
                     r.state[i] = .failed;
+                    // PETABRIDGE (k2a-pb1) spill P6: MiaAI-Lab 0016's store fix, verbatim
+                    s.giveRead(r, t.slot); // (never handed: its slot comes back now, or the job could never end)
                     s.readFailed(r, b.name, e);
                 }
             } else {

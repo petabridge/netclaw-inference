@@ -54,6 +54,8 @@ pub const rank_wire = @import("rank_wire.zig");
 pub const fingerprint = @import("fingerprint.zig");
 pub const rank_identity = @import("rank_identity.zig");
 pub const parts = @import("parts.zig");
+// PETABRIDGE (k2a-pb1) spill P6: the tier itself (wired into lanes, native and lanes_main; off unless asked)
+pub const spill_tier = @import("spill_tier.zig");
 
 test {
     // every declaration of every file, so functions no test calls are still compiled
@@ -124,4 +126,16 @@ test {
     _ = &model.Model.spillCheckResumed;
     _ = &model.Model.spillSelfCheck;
     _ = &model.Model.spillCheckLine;
+    // PETABRIDGE (k2a-pb1) spill P6: the tier (its tests: spill_tier_test.zig, loopback, worlds 2 and 3) and 0016's
+    // lanes/native refs: the Leader and Follower over the real device, the lanes' family and follower side
+    refAll(spill_tier);
+    refAll(lanes.SpillTier);
+    refAll(lanes.SpillFollower);
+    _ = &lanes.Lanes.spillFamily;
+    _ = &lanes.Lanes.spillWire;
+    _ = &lanes.followWith;
+    _ = &native.openSpill;
+    _ = &native.followerSpill;
+    _ = &native.rankExchange;
+    _ = @import("spill_p6_test.zig");
 }

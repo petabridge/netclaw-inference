@@ -63,12 +63,12 @@
     },
     "k2a_source_tree_sha256": "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade",
     "k2a_pb1": {
-      "note": "Petabridge's recipe: k2a plus 38 overlays and 16 new files (the inert spill store under zig/src/core/spill/ and the unwired dsv41 spill host modules) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
+      "note": "Petabridge's recipe: k2a plus 25 overlays and 19 new files (the inert spill store under zig/src/core/spill/ and the unwired dsv41 spill host modules) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "345969a3ddfde2d41f9d1d4e8dc62158c197f51431305a798639ff7b5a781397"
+        "sha256": "16f1f1045170a6da9e6e9e1075c5f7954dad5c37c1b37a904d949f8e1889110a"
       },
-      "source_tree_sha256": "819ed3794bf0d31a38107d4429b751ac79e0f178a3b71bf2c2f1cccc25df3cd2",
+      "source_tree_sha256": "9b53eb4a3750f217d0c9ba60ad7aec2489fb9a9e3febca591165f4def32b9c97",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -84,7 +84,7 @@
         },
         "zig/src/core/lane_host.zig": {
           "file": "pb1/overlay/zig/src/core/lane_host.zig",
-          "sha256": "29b57718a912b699a7ceed2240d50aeac3ab72a2468750b4db333592bda54f2b",
+          "sha256": "987c48090342e0cfc2aa056ea090b4c6231774b05fa00a5ae1a644b82805cb6b",
           "replaces_base_sha256": "63a04d2285d41d23de7179ba66fd1f9943618f78636c679307e4fb6d9d8c185d"
         },
         "zig/src/core/lanes/engine.zig": {
@@ -104,7 +104,7 @@
         },
         "zig/src/families/dsv41/lanes.zig": {
           "file": "pb1/overlay/zig/src/families/dsv41/lanes.zig",
-          "sha256": "89e5c141e3a3a38214e4fee0d59b51729dead0c3fc30896b92734905c3fb48aa",
+          "sha256": "fa9154bbdadd5dc6a8f114f28b9eafaf2bbdbfd76cb7629e5e6240d87cdef14a",
           "replaces_base_sha256": "00506fc47eeb39b06f414c92be81c2d661d4cc818d5324d4cff7b681e7f9de95"
         },
         "zig/src/families/dsv41/model.zig": {
@@ -139,7 +139,7 @@
         },
         "zig/src/families/dsv41/dsv41.zig": {
           "file": "pb1/overlay/zig/src/families/dsv41/dsv41.zig",
-          "sha256": "80f5b1f2a05aa36a4c93f22f12bff75acca6d8641a317aa7811ea9cdef00372b",
+          "sha256": "a941b0135fa46277ced58ae04d291faa6bb97f4a504f06a762b7969bc173b64e",
           "replaces_base_sha256": "e0be7b5fb7afcd6945eb1512073cc2f4e5d38052e624b1fa1682e20c56086e7a"
         },
         "zig/src/families/dsv41/link.zig": {
@@ -156,16 +156,56 @@
           "file": "pb1/overlay/zig/src/core/prompt_cache.zig",
           "sha256": "b1156b050497872d0d432a4aa936b1e11c9ab5ff6b7b17866f25e5fc2065b601",
           "replaces_base_sha256": "9446351e980bd206837ab625bfa521f51a4bb2f4feac9e79bf6c5a7b4bf936a1"
+        },
+        "zig/build/cuda.zig": {
+          "file": "pb1/overlay/zig/build/cuda.zig",
+          "sha256": "814fff6fdd5dbd97cc341ad18c2d61405ee9f41e7186618fa67c09db07ecb533",
+          "replaces_base_sha256": "c7ca819827054bc4d4e0fc68be7f3b485d2579cfe61c46df7404389fc742c215"
+        },
+        "zig/src/families/dsv41/lanes_main.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/lanes_main.zig",
+          "sha256": "caec2051e3d2539c26dba4830c85bd75ccbbd20b0aae806737d9c05522adb99e",
+          "replaces_base_sha256": "9f27f79e4520008471556ef9deba6db7d1bc9edc2f1ad5fd1ac48f8a1582be80"
+        },
+        "zig/src/families/dsv41/native.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/native.zig",
+          "sha256": "fb6a05600a8d0769e651654ddf92f5e4e475cfc8e1005f07dec66f98c4a49642",
+          "replaces_base_sha256": "1cd93d5d40d3c6d9dab7f263c97ba640c358e87c2ebcd8d5f447b61a816d7b20"
+        },
+        "zig/src/native/cuda.zig": {
+          "file": "pb1/overlay/zig/src/native/cuda.zig",
+          "sha256": "88249e919f2c4d0d384f5f93b796d6b2ba836f92dd93125db5596dfc86228eaf",
+          "replaces_base_sha256": "fa9efe5e0edbd464f6dd97434fa7029b906fc6cf63de6adcce117294f56853fa"
+        },
+        "zig/src/server/cli.zig": {
+          "file": "pb1/overlay/zig/src/server/cli.zig",
+          "sha256": "b406bf081ddda45251a9715cf27b01519e5b64871096b6afaba39db95bf36521",
+          "replaces_base_sha256": "255728ac09811a0b3f865cd4afb5367cc2ae09535ae93a4beb1f7fa3c92747f8"
+        },
+        "zig/src/server/engines.zig": {
+          "file": "pb1/overlay/zig/src/server/engines.zig",
+          "sha256": "c8189f091b64fa21cdeaa2393b292665092b6a1b15de6640d64e5dd9dc8ec522",
+          "replaces_base_sha256": "34d357c8054029cc3ffacc0e7ce207a00b041cf637b35e58b9a7e02f3f680265"
+        },
+        "zig/src/server/metrics.zig": {
+          "file": "pb1/overlay/zig/src/server/metrics.zig",
+          "sha256": "1a98bc0cf98654ccdba6a3ab640ae1482cd7d10c48d62f6f58aa3973ab5f6111",
+          "replaces_base_sha256": "ead6c8493fe0a705aba3bbf0d18cad7b5f75d81f77969913d686ec584fa8c212"
+        },
+        "zig/src/server/status_routes.zig": {
+          "file": "pb1/overlay/zig/src/server/status_routes.zig",
+          "sha256": "cb20047ddacd6cc8395320461043496b2e2ea09b6653ab55c8421a97e0199336",
+          "replaces_base_sha256": "bc11bb724d33221c03d5e4df6ecbf9467fab76058395d4450637fa8c5b12d246"
         }
       },
       "new_files": {
         "zig/src/core/spill/format.zig": { "file": "pb1/overlay/zig/src/core/spill/format.zig", "sha256": "2bb7988359e6f0c1ceb135ca3a99e1c447d9c0067dbbf6f0c3039bb5efb37f78" },
-        "zig/src/core/spill/fsio.zig": { "file": "pb1/overlay/zig/src/core/spill/fsio.zig", "sha256": "3230235c7c8fb679be549c0870c6430ed3359f3416578139de74491414b88782" },
+        "zig/src/core/spill/fsio.zig": { "file": "pb1/overlay/zig/src/core/spill/fsio.zig", "sha256": "612ab1ef59408098cd2995281085d3f3f86ebdfd887efba8531f77da583c627d" },
         "zig/src/core/spill/mutants.zig": { "file": "pb1/overlay/zig/src/core/spill/mutants.zig", "sha256": "0091c7880483000d4d82628519957252161c9f4cd6ad15bb63dfc0f15b4b03ca" },
         "zig/src/core/spill/root.zig": { "file": "pb1/overlay/zig/src/core/spill/root.zig", "sha256": "b61e88b8407693965c62615464cb595e4867f10db005b9f1b7974fa01dc00fc4" },
         "zig/src/core/spill/slots.zig": { "file": "pb1/overlay/zig/src/core/spill/slots.zig", "sha256": "a90b9afb856f6a47b05e95ce20b6bccfe52288a6a9daef5b8705976548f04316" },
-        "zig/src/core/spill/store.zig": { "file": "pb1/overlay/zig/src/core/spill/store.zig", "sha256": "8841edca1da954102c5df0be62a3bd693ef8e1416e1f83754924088d7bc8db16" },
-        "zig/src/core/spill/store_test.zig": { "file": "pb1/overlay/zig/src/core/spill/store_test.zig", "sha256": "c02e27d20b2aa48fc6c2632f50de6241a9a011b93890d26cde02c6f637fa58f4" },
+        "zig/src/core/spill/store.zig": { "file": "pb1/overlay/zig/src/core/spill/store.zig", "sha256": "716001f375fc52baace0495b85273c9a2786c0001c1fcd2fe690443fcec8c0a1" },
+        "zig/src/core/spill/store_test.zig": { "file": "pb1/overlay/zig/src/core/spill/store_test.zig", "sha256": "37ad91ba11fe6eba397d663db9950f5aabc62880ae98569177ad76360782089d" },
         "zig/src/families/dsv41/fingerprint.zig": { "file": "pb1/overlay/zig/src/families/dsv41/fingerprint.zig", "sha256": "21be879b245a329db4a86a0f0e409ebf322c044a1fbeb6233c5c1ec32983a2a5" },
         "zig/src/families/dsv41/parts.zig": { "file": "pb1/overlay/zig/src/families/dsv41/parts.zig", "sha256": "80d9afcaad39495ef66b82ac00671207d7d3b5bdc15e081474c20d674232e36b" },
         "zig/src/families/dsv41/rank_identity.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_identity.zig", "sha256": "d163462522dde8f52cf42f022cd24398f99013ceacc1c33810c4428f45ad2a81" },
@@ -174,15 +214,23 @@
         "zig/src/core/prompt_cache_fake_tier.zig": { "file": "pb1/overlay/zig/src/core/prompt_cache_fake_tier.zig", "sha256": "440ca6be4560fb0f037745c1953e245451c2cd48d64850d36603e3de031a65bd" },
         "zig/src/core/prompt_cache_tier_test.zig": { "file": "pb1/overlay/zig/src/core/prompt_cache_tier_test.zig", "sha256": "d1b44dae701de13191672c99234f74dded4d53354908b67c8a14801e4abb13fe" },
         "zig/src/core/lane_host_tier_test.zig": { "file": "pb1/overlay/zig/src/core/lane_host_tier_test.zig", "sha256": "5d385d3c94845114c371bdcc7309a6095fe69dddd6647ee1bdc57787b13febdb" },
-        "zig/src/core/spill_p5_k2a_test.zig": { "file": "pb1/overlay/zig/src/core/spill_p5_k2a_test.zig", "sha256": "32076bb218f7ecdfe6a0f2348ee460882029d74b7ecf0ec0406236b3b2a56ee6" }
+        "zig/src/core/spill_p5_k2a_test.zig": { "file": "pb1/overlay/zig/src/core/spill_p5_k2a_test.zig", "sha256": "32076bb218f7ecdfe6a0f2348ee460882029d74b7ecf0ec0406236b3b2a56ee6" },
+        "zig/src/families/dsv41/spill_p6_test.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_p6_test.zig", "sha256": "2ac33675217740a9cfc6d427a892ea70ddbe99f68825950852b8aeb9074cadca" },
+        "zig/src/families/dsv41/spill_tier.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_tier.zig", "sha256": "ac05b8bdbe9d9cead9d1e0124749d4b538d008e1e85de8928c28e2812291d4dd" },
+        "zig/src/families/dsv41/spill_tier_test.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_tier_test.zig", "sha256": "5eca15715d7fb3e1a3c4cfb8b5a66ae7486170f4e7659eb6f7238806c51fa108" }
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "b46183dd300151a522ce59c8781926874b299e8355b38312a0baaee8bf24ce69"
+        "sha256": "d9b890a8c21879a4aeaf79834edf60bcc7d373ee642fa7f19a12f61b35fa213c"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
       "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
       "ported_patches": [
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0016-dsv41-spill-blocks.patch",
+          "author": "MiaAI-Lab",
+          "note": "spill v2 step P6: 0016's dsv41 wiring with 0019's spill half and 0020's exit on a broken agreement, worlds 2 and 3; bump on every KV-pool write path (independently audited, widened to ratio-2 groups and the extent's scratch row); grid realignment with the tier on; off unless spill flags are given"
+        },
         {
           "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0014-core-cache-tier.patch",
           "author": "MiaAI-Lab",

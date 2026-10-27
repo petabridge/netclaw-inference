@@ -947,6 +947,9 @@ pub const LaneHost = struct {
         // PETABRIDGE (k2a-pb1) spill P5: v1 tiers un-salted requests only: a salted one stays memory-only, never asking
         // the tier (k2a's namespaces: its states and lookups never leave their namespace)
         if (r.cache_namespace != null) return false;
+        // PETABRIDGE (k2a-pb1) spill P6: pictures stay memory-only in v1 (MiaAI-Lab 0021 is not ported): a prompt with
+        // images never asks the tier (dsv41's spill_tier also refuses to write any point a picture reaches)
+        if (r.images.len > 0) return false;
         const key = keyOf(r);
         const now = std.Io.Clock.awake.now(h.io).toNanoseconds();
         const probe = store.probe(key, r.chunks);

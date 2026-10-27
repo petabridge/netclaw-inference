@@ -78,6 +78,22 @@ The changes:
     core/prompt_cache_fake_tier.zig, prompt_cache_tier_test.zig, lane_host_tier_test.zig (new files): the tip tests,
       bound to k2a's live/compatible where the tip used usable, 0020's full hook dropped
     core/spill_p5_k2a_test.zig (new file): a salted request never reaches the tier; drops release, never forget
+  spill v2, step P6: spill wired into dsv41 on rank 0 and the followers (MiaAI-Lab 0016, 0019's spill half, 0020's
+  exit on a broken agreement), off unless spill flags are given
+    families/dsv41/spill_tier.zig (new file, tip) and lanes.zig: Kind.rank_wire = 10, spillReserve, loading Snaps,
+      the follower SpillFollower in follow(); tier.bump before every KV-pool write (fill chunks, verify and draft rows
+      including the 0005 interleave's rounds, copyExtent; widened to ratio-2 groups and the extent's scratch row) and
+      bumpSlot on slot reuse; staling and drops guard pending captures first; with the tier on, a pass that resumes
+      off the 2,048 grid cuts its first chunk at the next grid boundary and only grid points go to disk; complete,
+      decoded, off-grid and picture points stay memory-only; a restored state enters retention's probation
+    families/dsv41/native.zig, lanes_main.zig, native/cuda.zig, build/cuda.zig (k2a's or upstream's files):
+      openSpill, spillPreflight (worlds 2 and 3; TF_DS_KV_SHARD refused unless unset or 0), the rank exchange, the
+      flags and env, the tier bound to the prompt cache; rank 0 exits 75 when the ranks' agreement breaks
+    server/cli.zig, engines.zig, metrics.zig, status_routes.zig: 0014's deferred server hunks (the spill flags, the
+      tier's counters in /health and /metrics when a tier is bound)
+    core/spill/{fsio,store,store_test}.zig: 0016's read-failure slot fix and 0019's scan-progress hooks
+    core/lane_host.zig: picture requests never ask the tier
+    families/dsv41/spill_p6_test.zig, spill_tier_test.zig (new files): the grid realignment and refusal rules, world 3
 """
 import argparse
 import hashlib
@@ -108,6 +124,14 @@ OVERLAYS = {
     "zig/src/families/dsv41/link.zig": "bd0509c979e4adac66a3705657ed2e6155a35969153da91ce1b26cf91cb3f6ab",
     "zig/src/families/dsv41/rank_cache.zig": "a7e6794e4ecf7c20bcce1bb9effef374382be53794d7578f815b26b458ca529e",
     "zig/src/core/prompt_cache.zig": "9446351e980bd206837ab625bfa521f51a4bb2f4feac9e79bf6c5a7b4bf936a1",
+    "zig/build/cuda.zig": "c7ca819827054bc4d4e0fc68be7f3b485d2579cfe61c46df7404389fc742c215",
+    "zig/src/families/dsv41/lanes_main.zig": "9f27f79e4520008471556ef9deba6db7d1bc9edc2f1ad5fd1ac48f8a1582be80",
+    "zig/src/families/dsv41/native.zig": "1cd93d5d40d3c6d9dab7f263c97ba640c358e87c2ebcd8d5f447b61a816d7b20",
+    "zig/src/native/cuda.zig": "fa9efe5e0edbd464f6dd97434fa7029b906fc6cf63de6adcce117294f56853fa",
+    "zig/src/server/cli.zig": "255728ac09811a0b3f865cd4afb5367cc2ae09535ae93a4beb1f7fa3c92747f8",
+    "zig/src/server/engines.zig": "34d357c8054029cc3ffacc0e7ce207a00b041cf637b35e58b9a7e02f3f680265",
+    "zig/src/server/metrics.zig": "ead6c8493fe0a705aba3bbf0d18cad7b5f75d81f77969913d686ec584fa8c212",
+    "zig/src/server/status_routes.zig": "bc11bb724d33221c03d5e4df6ecbf9467fab76058395d4450637fa8c5b12d246",
 }
 # Files k2a-pb1 adds that upstream's tree does not have (their file is overlay/<target path>): each must be absent
 # from k2a.json's source_files, so an upstream that starts shipping one makes this script stop instead of clobbering it.
@@ -128,6 +152,9 @@ NEW_FILES = [
     "zig/src/core/prompt_cache_tier_test.zig",
     "zig/src/core/lane_host_tier_test.zig",
     "zig/src/core/spill_p5_k2a_test.zig",
+    "zig/src/families/dsv41/spill_p6_test.zig",
+    "zig/src/families/dsv41/spill_tier.zig",
+    "zig/src/families/dsv41/spill_tier_test.zig",
 ]
 
 
