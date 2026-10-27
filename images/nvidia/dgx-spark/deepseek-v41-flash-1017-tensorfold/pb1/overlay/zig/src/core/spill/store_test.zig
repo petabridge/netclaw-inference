@@ -851,9 +851,12 @@ fn checkBudget(gpa: Allocator) !void {
     var slow: Slow = .{ .h = h };
     defer slow.calls.deinit(gpa);
     var turn: usize = 0;
-    const t0 = std.Io.Clock.awake.now(io).toNanoseconds();
     _ = h.s.stepReads(&ids, &turn, 40 * std.time.ns_per_ms, &slow, Slow.copy);
-    const took = std.Io.Clock.awake.now(io).toNanoseconds() - t0;
+    // PETABRIDGE (k2a-pb1) spill P6: MiaAI-Lab 0016's hunk, verbatim.
+    // copies counted, not wall time (a loaded machine stretches each 30 ms sleep, which let the every-read-its-own-
+    // budget mutant fit under a time bound): one shared 40 ms budget takes 1 or 2 copies; a budget each read takes
+    // at least one copy per read, 3
+    const first_calls = slow.calls.items.len;
     var firsts: [3]store.ReadId = undefined;
     for (0..3) |k| {
         slow.calls.clearRetainingCapacity();
@@ -861,7 +864,7 @@ fn checkBudget(gpa: Allocator) !void {
         firsts[k] = if (slow.calls.items.len > 0) slow.calls.items[0] else 0;
     }
     for (ids) |id| _ = h.s.endRead(id, .cancel) catch {};
-    try ensure(took < 140 * std.time.ns_per_ms, @src()); // (60 ms expected; every read the whole budget: 180)
+    try ensure(first_calls >= 1 and first_calls <= 2, @src()); // (every read the whole budget: 3 or more)
     std.mem.sort(store.ReadId, &firsts, {}, std.sort.asc(store.ReadId));
     var want = ids;
     std.mem.sort(store.ReadId, &want, {}, std.sort.asc(store.ReadId));

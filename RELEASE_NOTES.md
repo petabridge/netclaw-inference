@@ -12,6 +12,14 @@ Images:
 
 Changes:
 
+- **Spill v2, step P6: spill wired into the DeepSeek V4.1 Flash 1017 engine on all three ranks, off unless spill
+  flags are given (recipe `k2a-pb1`).** MiaAI-Lab's 0016 dsv41 wiring with 0019's spill half and 0020's exit on a
+  broken agreement, for worlds 2 and 3: the rank wire frame, restore reservations, the followers' spill side,
+  the tier bound to the prompt cache, the spill flags and the tier's counters in `/health` and `/metrics`.
+  Every write into the KV pool bumps the tier's generations first (independently audited, and widened to the
+  ratio-2 groups and scratch row a write can touch); with the tier on, a pass resuming off the 2,048 grid cuts
+  its first chunk at the next boundary and only grid points go to disk. An independent review confirmed that
+  with no spill flags (production) behaviour is unchanged on every rank.
 - **Spill v2, step P5: the cache tier in the DeepSeek V4.1 Flash 1017 engine's prompt cache and lane host, no tier
   bound (recipe `k2a-pb1`).** MiaAI-Lab's `0014-core-cache-tier`, hand-merged into k2a's `prompt_cache` and
   `lane_host`: the tier interface, durable lookup (grid and window rules for disk points only), restore parking

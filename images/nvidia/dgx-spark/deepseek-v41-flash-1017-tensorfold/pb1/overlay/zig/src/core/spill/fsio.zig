@@ -35,6 +35,13 @@ pub const Hooks = struct {
     free: ?*const fn (ctx: ?*anyopaque) u64 = null,
     /// O_DIRECT opens fail with EINVAL (a file system without it).
     no_direct: bool = false,
+    // PETABRIDGE (k2a-pb1) spill P6: MiaAI-Lab 0019's scan hooks (a follower opens its store on its own thread and
+    // rank 0 waits while the scan progresses: spill_tier.Follower.openThread, Leader.awaitFollowers).
+    /// Counts every name the open's scan reads (a caller on another thread watches a long scan: a follower's open
+    /// answers rank 0 while it runs).
+    progress: ?*std.atomic.Value(u64) = null,
+    /// Called for every name the open's scan reads (tests: a slow disk).
+    scanned: ?*const fn (ctx: ?*anyopaque, name: []const u8) void = null,
 };
 
 pub const Crashed = error.Crashed;
