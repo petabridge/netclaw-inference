@@ -40,6 +40,10 @@ The changes:
       resumed, then superseded (an older prefix of a conversation that moved on), then resumed conversations' newest
       states, least recently used first in each; a new state inherits its conversation's resume count. Rank 0 alone
       decides placement, so no frame changes; TF_DS_RETENTION=0 restores upstream's oldest-first order
+  stale Engram read-ahead (Petabridge)
+    families/dsv41/model.zig: fillBegin clears a read-ahead the previous pass left joined (a pass that ended early
+      between chunks), so 0005's joined-read-ahead reuse can never hand another prompt's Engram rows to this pass's
+      first chunk
 """
 import argparse
 import hashlib

@@ -176,11 +176,13 @@ The image prompt cache is a port of MiaAI-Lab's [`zig/patches/0006-image-prompt-
 
 Retention is Petabridge's own change, for MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#27. Kept prompt states live in the shared KV pool, and when a new stream needs room, upstream's `placeKept` gave up the oldest first. An agent's long main conversation sits idle while its subagents and one-shot jobs run, so it was always the oldest and always lost: over about four hours, 92 prompts of 20K tokens or more re-read from 0 and 57 more resumed only at the shared system prefix, about 10.3M tokens re-prefilled. Now the victim is the least recently used state of the lowest tier: never resumed first, then superseded (an older prefix of a conversation that has a newer state; a shared prefix that many conversations resume stays recently used, so it goes last in this tier), then the newest states of resumed conversations. A new state inherits its conversation's resume count. Rank 0 alone decides placement, so no frame changes. `TF_DS_RETENTION` is on when unset; `0` restores upstream's oldest-first order.
 
+The stale Engram read-ahead fix is Petabridge's too. MiaAI-Lab's 0005 made `fillChunk` reuse a read-ahead that was already joined when its `start` and `n` match. A pass that ends early, from a cancel between chunks or the interleave's error path, leaves that state set, and `fillBegin` did not clear it. So the next pass whose first chunk started at the same position, a resume there, took the other prompt's Engram rows for one chunk, silently. `fillBegin` now joins and clears it on every rank.
+
 `pb1/make_recipe.py` runs in the `engine` stage and writes the overlay objects, `variants/recipes/k2a-pb1.json`
 (33 overlays: k2a has 27; the two `tool_parse` files, `fake.zig`, `model.zig`, `prompt.zig` and `lane_host_reuse_test.zig` are new targets, and `lane_host.zig`, `engine.zig`, `stream.zig`, `dsv41/lanes.zig`, `engine_api.zig` and `chat.zig` replace k2a's own overlays of those files) and `profiles/1.2.5-pb1.json` (profile 1.2.5 with `build_variant: "k2a-pb1"`,
 used only by `build.py install`). It refuses to run unless `k2a.json` is the pinned upstream file (`600c83c8...`)
 and each replaced file is still the one it was written against (upstream's base, or k2a's own overlay), so a new upstream commit cannot silently
-drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `fc27cde0...`. The image
+drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `c622a223...`. The image
 carries both `recipes/k2a.json` and `recipes/k2a-pb1.json`.
 
 Upstream report: [MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67).

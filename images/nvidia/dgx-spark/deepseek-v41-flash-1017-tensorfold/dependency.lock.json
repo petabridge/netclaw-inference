@@ -66,9 +66,9 @@
       "note": "Petabridge's recipe: k2a plus 33 overlays (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "fc27cde0163915ecc40d1e38a9b84cb3cb898d6e38a8f47bb24caf8eebc14fc6"
+        "sha256": "c622a2232712ae434b9d67c894e8dfc5e49eea2114863195bd9a8131f58aeaa0"
       },
-      "source_tree_sha256": "8a58576e00a8d7749dc53d14355656a9df28a3001b696719c0d52bd51db1a56c",
+      "source_tree_sha256": "501f03c76add54484eb0008dd50db8c19d335c92f6e1cda95e87400632578cc3",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -109,7 +109,7 @@
         },
         "zig/src/families/dsv41/model.zig": {
           "file": "pb1/overlay/zig/src/families/dsv41/model.zig",
-          "sha256": "919f0051acab95cb5b49d79a1e30eb8506a9a41a6436a0ce0e7b973f3db2328a",
+          "sha256": "368830416374795f860fe00f129520593e651c51709d7e45d3ec4273c22ba85a",
           "replaces_base_sha256": "9fbd6a092c2e62661b08a16990a441a4b610c4c789a60b01e78e078b65ca20c2"
         },
         "zig/src/core/engine_api.zig": {
@@ -135,7 +135,7 @@
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "bd08a79be633e2c93abb0aa2f033c7dca4714d54b6919e2618b2c67a689e76d2"
+        "sha256": "71bd27157b46bc74259fbbc018161673d15a883c1696280fbcb9aa6d2ca129c3"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
       "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
