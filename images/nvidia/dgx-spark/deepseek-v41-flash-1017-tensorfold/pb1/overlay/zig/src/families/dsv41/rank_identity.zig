@@ -281,10 +281,13 @@ pub fn gather(gpa: std.mem.Allocator, io: Io, o: anytype, m: anytype, x: Extra) 
     const aot: fingerprint.Source = if (o.aot_dir) |p| .{ .tree = .{ .dir = cwd, .path = p } } else treeOr(io, kit, "aot", null);
     const rdma: fingerprint.Source = if (o.rdma_kernels) |p| .{ .file = .{ .dir = cwd, .path = p } } else if (o.rdma_devices != null) .{ .bytes = "embedded" } else .none;
 
-    const engram: []const u8 = if (o.engram_dir) |p| blk: {
+    // PETABRIDGE (k2a-pb1): the revision and the kit's engram.json are every rank's (the common engram field); the
+    // shard folder's listing is this rank's own (engram_shard: under TP3 each rank holds other shard files)
+    const engram: []const u8 = if (o.engram_dir != null) blk: {
         const ej = if (exists(io, kit, "engram.json")) try fingerprint.fileDigest(io, kit, "engram.json") else @as(fingerprint.Digest, @splat(0));
-        break :blk try std.fmt.allocPrint(a, "{s}|{x}|{s}", .{ x.engram_revision, &ej, try listing(a, io, cwd, p) });
+        break :blk try std.fmt.allocPrint(a, "{s}|{x}", .{ x.engram_revision, &ej });
     } else "off";
+    const engram_shard: []const u8 = if (o.engram_dir) |p| try listing(a, io, cwd, p) else "off";
 
     const vision: []const u8 = if (m.cfg.vision) blk: {
         const bias = if (o.vision_bias) |p| try fingerprint.fileDigest(io, cwd, p) else if (exists(io, kit, "vision/gate_bias_vl.safetensors")) try fingerprint.fileDigest(io, kit, "vision/gate_bias_vl.safetensors") else @as(fingerprint.Digest, @splat(0));
@@ -344,6 +347,7 @@ pub fn gather(gpa: std.mem.Allocator, io: Io, o: anytype, m: anytype, x: Extra) 
         .rank = @intCast(o.rank),
         .rank_split = try rankSplitText(rbuf, o.rank, o.world),
         .rank_layout = x.rank_layout,
+        .engram_shard = engram_shard,
     };
     return g;
 }
@@ -643,10 +647,22 @@ test "PETABRIDGE TP3: three ranks' split, and the head's own chat template agree
     try d.writeFile(io, .{ .sub_path = "kit/cubins/a.cubin", .data = "A" });
     try d.writeFile(io, .{ .sub_path = "kit/aot/aot.json", .data = "{}" });
     try d.writeFile(io, .{ .sub_path = "kit/rope-plain-cos.f32", .data = "rope" });
+    try d.writeFile(io, .{ .sub_path = "kit/engram.json", .data = "{\"revision\": \"engram-2026-10-17\"}" });
     for (0..3) |r| {
         var nb: [32]u8 = undefined;
         var ib: [16]u8 = undefined;
         try writeRankCache(io, d, try std.fmt.bufPrint(&nb, "cache/rank{d}of3.bin", .{r}), try std.fmt.bufPrint(&ib, "{{\"w\":{d}}}", .{r}), "weights");
+        // each rank's own Engram shard folder (engram-tp3): four files, other names and sizes on every rank
+        var eb: [32]u8 = undefined;
+        const edir = try std.fmt.bufPrint(&eb, "engram{d}/engram-tp3", .{r});
+        try d.createDirPath(io, edir);
+        var ed = try d.openDir(io, edir, .{});
+        defer ed.close(io);
+        for (0..4) |s| {
+            var fb2: [48]u8 = undefined;
+            const body: [16]u8 = @splat('e');
+            try ed.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&fb2, "shard-r{d}-{d}.bin", .{ r, s }), .data = body[0 .. 1 + r + s] });
+        }
     }
     var root_buf: [1024]u8 = undefined;
     const root = root_buf[0..try d.realPath(io, &root_buf)];
@@ -669,11 +685,13 @@ test "PETABRIDGE TP3: three ranks' split, and the head's own chat template agree
             .rank = rank,
             .world = 3,
             .round_rows = 48,
+            .engram_dir = try std.fs.path.join(a, &.{ root, try std.fmt.allocPrint(a, "engram{d}/engram-tp3", .{rank}) }),
         };
         const x: Extra = .{
             .engine_id = envp.engine_id,
             .recipe_patches = envp.recipe_patches,
             .model_revision = envp.model_revision,
+            .engram_revision = envp.engram_revision, // (TF_DS_ENGRAM_REVISION: the same on every rank)
             .features = features,
             .native_format = 1,
             .chunk_rows = 2048,
@@ -704,6 +722,14 @@ test "PETABRIDGE TP3: three ranks' split, and the head's own chat template agree
         try testing.expect(!std.mem.eql(u8, &fps[0].rankDigest(), &f.rankDigest()));
     }
     try testing.expect(!std.mem.eql(u8, &fps[1].rankDigest(), &fps[2].rankDigest()));
+    // each rank's own Engram shards: engram_shard (a rank field) differs on every pair, engram (the revision and
+    // engram.json, common) agrees, so the three still agree (the production refusal "differs ... in engram" is gone)
+    try testing.expectEqual(fingerprint.Scope.rank, fingerprint.scope(.engram_shard));
+    try testing.expectEqualSlices(u8, &fps[0].get(.engram), &fps[1].get(.engram));
+    try testing.expectEqualSlices(u8, &fps[0].get(.engram), &fps[2].get(.engram));
+    try testing.expect(!std.mem.eql(u8, &fps[0].get(.engram_shard), &fps[1].get(.engram_shard)));
+    try testing.expect(!std.mem.eql(u8, &fps[1].get(.engram_shard), &fps[2].get(.engram_shard)));
+    try testing.expect(!std.mem.eql(u8, &fps[0].get(.engram_shard), &fps[2].get(.engram_shard)));
     // rank 2 on a checkpoint with another tokenizer: a common field, named
     try testing.expectEqual(@as(?u16, @intFromEnum(fingerprint.Field.tokenizer)), x0.differs(&fps[3].exchange()));
 }

@@ -12,6 +12,11 @@ Images:
 
 Changes:
 
+- **Spill v2: the ranks agree with per-rank Engram shards (recipe `k2a-pb1`).** With TP3, each rank has its own
+  Engram shard folder, but the spill fingerprint's common `engram` field included the folder's file listing. Rank 0
+  therefore refused to start with spill on ("rank 1's configuration differs from rank 0's in engram"). The common
+  field is now the recorded revision plus the kit's `engram.json` digest. The listing moves to a new rank-scoped field,
+  `engram_shard` (31), so each rank's store still names its own shards. Spill is still off unless spill flags are given.
 - **Spill v2, step P6: spill wired into the DeepSeek V4.1 Flash 1017 engine on all three ranks, off unless spill
   flags are given (recipe `k2a-pb1`).** MiaAI-Lab's 0016 dsv41 wiring with 0019's spill half and 0020's exit on a
   broken agreement, for worlds 2 and 3: the rank wire frame, restore reservations, the followers' spill side,

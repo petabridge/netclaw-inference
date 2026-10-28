@@ -94,6 +94,11 @@ The changes:
     core/spill/{fsio,store,store_test}.zig: 0016's read-failure slot fix and 0019's scan-progress hooks
     core/lane_host.zig: picture requests never ask the tier
     families/dsv41/spill_p6_test.zig, spill_tier_test.zig (new files): the grid realignment and refusal rules, world 3
+  spill v2, per-rank Engram shards (Petabridge): with TP3 each rank holds its own Engram shard folder
+    families/dsv41/fingerprint.zig, rank_identity.zig: the common engram field is the recorded revision and the kit's
+      engram.json digest; the shard folder's listing moves to a new rank-scoped field, engram_shard (31), so the ranks
+      agree while each rank's store still names its own shards
+    families/dsv41/rank_wire.zig: the world-3 loopback test with per-rank shards (agree) and a differing revision (refused)
 """
 import argparse
 import hashlib
