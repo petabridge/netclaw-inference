@@ -2844,6 +2844,12 @@ fn rankFx(rank: u8, template: u8, odd: ?fingerprint.Field) fingerprint.Exchange 
     return (b.finish(null) catch unreachable).exchange();
 }
 
+/// PETABRIDGE (k2a-pb1): field `f`'s digest in an exchange (a test's look at one field).
+fn fxDigest(x: fingerprint.Exchange, f: fingerprint.Field) Digest {
+    for (x.entries()) |e| if (e.id == @intFromEnum(f)) return e.digest;
+    unreachable;
+}
+
 /// PETABRIDGE (k2a-pb1): "done" to every follower and their threads joined, so a test can read their sides
 /// (Pair.finish then only closes and frees; its second "done" goes nowhere).
 fn stopAll(s: *Pair) void {
@@ -2988,6 +2994,14 @@ test "PETABRIDGE TP3: a per-rank field (the head's chat template) never breaks a
         try testing.expectEqualSlices(u8, &rankFx(0, 0xa0, null).rank, &a.ranks[0]);
         // ... but it is in rank 0's own digest, so rank 0's store compat moves with the template (followers' do not)
         try testing.expect(!std.mem.eql(u8, &rankFx(0, 0xa0, null).rank, &rankFx(0, 0xb0, null).rank));
+        // each rank's own Engram shard listing (engram_shard, a rank field rankFx gives per rank) differs on every
+        // rank too, and the three agreed: each rank's own digest (its store namespace) carries its shards
+        try testing.expectEqual(fingerprint.Scope.rank, fingerprint.scope(.engram_shard));
+        for ([_]u8{ 0, 1, 2 }) |r| for ([_]u8{ 0, 1, 2 }) |q| if (r != q) {
+            try testing.expect(!std.mem.eql(u8, &fxDigest(rankFx(r, 0xb0, null), .engram_shard), &fxDigest(rankFx(q, 0xb0, null), .engram_shard)));
+        };
+        try testing.expectEqualSlices(u8, &fxDigest(rankFx(0, 0xa0, null), .engram), &fxDigest(rankFx(2, 0xb0, null), .engram));
+        try testing.expect(!std.mem.eql(u8, &a.storeCommon(1), &a.storeCommon(2)));
         stopAll(&s);
         for (s.peers[0..2]) |peer| {
             try testing.expectEqual(@as(?anyerror, null), peer.err);
@@ -3001,6 +3015,8 @@ test "PETABRIDGE TP3: a per-rank field (the head's chat template) never breaks a
     for ([_]Odd{
         .{ .odd1 = null, .odd2 = .kit_cuda, .rank = 2, .field = .kit_cuda, .text = "rank 2's configuration differs from rank 0's in kit_cuda" },
         .{ .odd1 = .tokenizer, .odd2 = .engine_commit, .rank = 1, .field = .tokenizer, .text = "rank 1's configuration differs from rank 0's in tokenizer" },
+        // (another Engram revision on rank 1: still common, still named, while every rank's shards differ)
+        .{ .odd1 = .engram, .odd2 = null, .rank = 1, .field = .engram, .text = "rank 1's configuration differs from rank 0's in engram" },
     }) |c| {
         var s = try newPair();
         defer s.finish();

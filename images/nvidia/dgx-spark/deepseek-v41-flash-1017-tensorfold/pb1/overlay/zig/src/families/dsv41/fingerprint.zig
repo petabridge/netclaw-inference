@@ -40,7 +40,7 @@ pub const Field = enum(u16) {
     dspark = 13, // DSpark (drafter) weights and policy, else "off"
     tokenizer = 14, // tokenizer identity
     template = 15, // chat template identity
-    engram = 16, // Engram shard revisions and hashes (engram.json), else "off"
+    engram = 16, // the Engram tables' recorded revision and the kit's engram.json digest, else "off"
     token_map = 17, // the compressed token map
     rope = 18, // the served RoPE tables
     vision = 19, // vision preprocessing and routing bias, else "off"
@@ -55,6 +55,9 @@ pub const Field = enum(u16) {
     features = 28, // the switches that change state or protocol (spill, shard, carry, idx split, engram lanes ...)
     rank_split = 29, // this rank's index and its part of the split
     rank_layout = 30, // this rank's state layout digest (spill_state.StateLayout.digest)
+    // PETABRIDGE (k2a-pb1): each rank serves its own Engram shard folder (TP3: engram-tp3, other names and sizes per
+    // rank), so its listing is this rank's own, not a field the ranks could agree on
+    engram_shard = 31, // this rank's Engram shard files (names and sizes), else "off"
 };
 
 pub const n_fields = @typeInfo(Field).@"enum".field_names.len;
@@ -64,7 +67,8 @@ pub fn scope(f: Field) Scope {
         // the chat template is rank 0's alone (it renders prompts; followers take ids, and the served folder carries the
         // recipe's template while a follower may read the plain checkpoint): a kept state depends on the ids, not on how
         // they were made, so the ranks need not agree on it
-        .rank_cache, .rank_split, .rank_layout, .template => .rank,
+        // (PETABRIDGE k2a-pb1: engram_shard, each rank's own Engram shard folder; the revision stays common in engram)
+        .rank_cache, .rank_split, .rank_layout, .template, .engram_shard => .rank,
         else => .common,
     };
 }
@@ -409,7 +413,8 @@ pub const Inputs = struct {
     dspark: []const u8, // drafter weights identity and policy (streams, depth), or "off"
     tokenizer: Source,
     template: Source,
-    engram: []const u8, // engram.json's revisions and shard hashes, or "off"
+    engram: []const u8, // the Engram revision and engram.json's digest (the same on every rank), or "off"
+    engram_shard: []const u8, // this rank's Engram shard folder's listing (names and sizes), or "off"
     token_map: Source,
     rope: Source, // the served RoPE tables (TF_DS_KIT/rope-*.f32)
     vision: []const u8, // vision preprocessing + routing bias identity, or "off"
@@ -504,6 +509,7 @@ pub fn build(gpa: std.mem.Allocator, io: std.Io, in: Inputs) !Fingerprint {
     b.int(.rank_split, u16, in.rank);
     b.part(.rank_split, in.rank_split);
     b.part(.rank_layout, &in.rank_layout);
+    b.part(.engram_shard, in.engram_shard);
     return b.finish(null);
 }
 
@@ -548,6 +554,7 @@ fn testInputs() Inputs {
         .rank = 0,
         .rank_split = "rank0",
         .rank_layout = @splat(7),
+        .engram_shard = "rank0.bin:1024;",
     };
 }
 
@@ -589,6 +596,7 @@ fn mutate(in: Inputs, f: Field) Inputs {
         .features => o.features = "spill=1;shard=1",
         .rank_split => o.rank_split = "rank0b",
         .rank_layout => o.rank_layout = @splat(8),
+        .engram_shard => o.engram_shard = "rank1.bin:2048;",
     }
     return o;
 }
@@ -715,4 +723,52 @@ test "the agreement narrows to each rank's store" {
     var buf: [16]u8 = undefined;
     try std.testing.expectEqualStrings("engine_commit", describe(3, &buf));
     try std.testing.expectEqualStrings("field 999", describe(999, &buf));
+}
+
+// PETABRIDGE (k2a-pb1): TP3 ranks each serve their own Engram shard folder (other file names and sizes per rank),
+// while the revision and engram.json are the same everywhere. The shard listing is a rank field: it never breaks the
+// agreement, and it stays in each rank's own digest, so each rank's store namespace still moves with its shards.
+test "PETABRIDGE: each rank's own Engram shards never differ; the Engram revision does; the shards move the rank's store" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    try std.testing.expectEqual(Scope.common, scope(.engram));
+    try std.testing.expectEqual(Scope.rank, scope(.engram_shard));
+    try std.testing.expectEqual(@as(u16, 31), @intFromEnum(Field.engram_shard));
+    try std.testing.expectEqual(@as(?Field, .engram_shard), fieldOf(31));
+    var in0 = testInputs();
+    in0.engram = "engram-2026-10-17|ej";
+    in0.engram_shard = "engram-tp3-r0-a.bin:100;engram-tp3-r0-b.bin:200;engram-tp3-r0-c.bin:300;engram-tp3-r0-d.bin:400;";
+    var in1 = in0;
+    in1.engram_shard = "engram-tp3-r1-a.bin:101;engram-tp3-r1-b.bin:201;engram-tp3-r1-c.bin:301;engram-tp3-r1-d.bin:401;";
+    const f0 = try build(gpa, io, in0);
+    const f1 = try build(gpa, io, in1);
+    // two exchanges that differ only in engram_shard: no difference, the same common digest
+    try std.testing.expect(!std.mem.eql(u8, &f0.get(.engram_shard), &f1.get(.engram_shard)));
+    try std.testing.expectEqual(@as(?u16, null), f0.exchange().differs(&f1.exchange()));
+    try std.testing.expectEqual(@as(?u16, null), f1.exchange().differs(&f0.exchange()));
+    try std.testing.expectEqualSlices(u8, &f0.common(), &f1.common());
+    // ... but each rank's own digest, and so its store namespace, holds its shards
+    try std.testing.expect(!std.mem.eql(u8, &f0.rankDigest(), &f1.rankDigest()));
+    var a: Agreement = .{ .common = f0.common(), .world = 3 };
+    a.ranks = .{ f0.rankDigest(), @splat(5), @splat(6), @splat(0) };
+    var b = a;
+    b.ranks[0] = f1.rankDigest(); // rank 0 restarted on other shard files
+    try std.testing.expect(!std.mem.eql(u8, &a.storeCommon(0), &b.storeCommon(0)));
+    try std.testing.expectEqualSlices(u8, &a.storeCommon(1), &b.storeCommon(1));
+    // another Engram revision (or engram.json): still a common difference, named engram
+    var in2 = in0;
+    in2.engram = "engram-2026-10-18|ej";
+    const f2 = try build(gpa, io, in2);
+    try std.testing.expectEqual(@as(?u16, @intFromEnum(Field.engram)), f0.exchange().differs(&f2.exchange()));
+    try std.testing.expectEqual(@as(?u16, @intFromEnum(Field.engram)), f2.exchange().differs(&f0.exchange()));
+    // Engram on against off is a common difference too (engram "off"), whatever the shards
+    var in3 = in1;
+    in3.engram = "off";
+    in3.engram_shard = "off";
+    const f3 = try build(gpa, io, in3);
+    try std.testing.expectEqual(@as(?u16, @intFromEnum(Field.engram)), f0.exchange().differs(&f3.exchange()));
+    // a peer that does not list engram_shard at all (an older build): a difference, never silently agreed
+    var old = f0.exchange();
+    old.n -= 1;
+    try std.testing.expectEqual(@as(?u16, @intFromEnum(Field.engram_shard)), f0.exchange().differs(&old));
 }

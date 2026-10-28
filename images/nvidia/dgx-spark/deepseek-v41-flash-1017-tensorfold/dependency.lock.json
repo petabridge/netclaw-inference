@@ -66,9 +66,9 @@
       "note": "Petabridge's recipe: k2a plus 25 overlays and 19 new files (the inert spill store under zig/src/core/spill/ and the unwired dsv41 spill host modules) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
       "recipe_file": {
         "path": "tensorfold/variants/recipes/k2a-pb1.json",
-        "sha256": "16f1f1045170a6da9e6e9e1075c5f7954dad5c37c1b37a904d949f8e1889110a"
+        "sha256": "69eb2fa5ccc5eb1ee369c25c1bd1afab2da52f0b62967a446fe4e74038f0cc66"
       },
-      "source_tree_sha256": "9b53eb4a3750f217d0c9ba60ad7aec2489fb9a9e3febca591165f4def32b9c97",
+      "source_tree_sha256": "3eb7f4e7846a8be5f6812c1df00c5d571905cfeb5d088f15e6e27947071939a3",
       "base_recipe": "k2a",
       "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
       "overlays": {
@@ -206,10 +206,10 @@
         "zig/src/core/spill/slots.zig": { "file": "pb1/overlay/zig/src/core/spill/slots.zig", "sha256": "a90b9afb856f6a47b05e95ce20b6bccfe52288a6a9daef5b8705976548f04316" },
         "zig/src/core/spill/store.zig": { "file": "pb1/overlay/zig/src/core/spill/store.zig", "sha256": "716001f375fc52baace0495b85273c9a2786c0001c1fcd2fe690443fcec8c0a1" },
         "zig/src/core/spill/store_test.zig": { "file": "pb1/overlay/zig/src/core/spill/store_test.zig", "sha256": "37ad91ba11fe6eba397d663db9950f5aabc62880ae98569177ad76360782089d" },
-        "zig/src/families/dsv41/fingerprint.zig": { "file": "pb1/overlay/zig/src/families/dsv41/fingerprint.zig", "sha256": "21be879b245a329db4a86a0f0e409ebf322c044a1fbeb6233c5c1ec32983a2a5" },
+        "zig/src/families/dsv41/fingerprint.zig": { "file": "pb1/overlay/zig/src/families/dsv41/fingerprint.zig", "sha256": "82034137687451b91b2c782363817d907fa278a8a57347ec0166436119284f40" },
         "zig/src/families/dsv41/parts.zig": { "file": "pb1/overlay/zig/src/families/dsv41/parts.zig", "sha256": "80d9afcaad39495ef66b82ac00671207d7d3b5bdc15e081474c20d674232e36b" },
-        "zig/src/families/dsv41/rank_identity.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_identity.zig", "sha256": "d163462522dde8f52cf42f022cd24398f99013ceacc1c33810c4428f45ad2a81" },
-        "zig/src/families/dsv41/rank_wire.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_wire.zig", "sha256": "13ae9adce37770258855019d85f22426504af6e2e84c24efa47658a28f887939" },
+        "zig/src/families/dsv41/rank_identity.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_identity.zig", "sha256": "25a530f152a187b7ed1fed6f32805c844bf144f08800054945110fac1a758643" },
+        "zig/src/families/dsv41/rank_wire.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_wire.zig", "sha256": "3dee50ee33331bb9e7ddbfb8fb71c7b2299e01c3d45cbe49f3237814062706bd" },
         "zig/src/families/dsv41/spill_state.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_state.zig", "sha256": "12a331a70ddc0a23830f5653e8a3fe4e2a8aa938f54d5c7e2e2f84b0cff5d148" },
         "zig/src/core/prompt_cache_fake_tier.zig": { "file": "pb1/overlay/zig/src/core/prompt_cache_fake_tier.zig", "sha256": "440ca6be4560fb0f037745c1953e245451c2cd48d64850d36603e3de031a65bd" },
         "zig/src/core/prompt_cache_tier_test.zig": { "file": "pb1/overlay/zig/src/core/prompt_cache_tier_test.zig", "sha256": "d1b44dae701de13191672c99234f74dded4d53354908b67c8a14801e4abb13fe" },
@@ -221,7 +221,7 @@
       },
       "make_recipe": {
         "file": "pb1/make_recipe.py",
-        "sha256": "d9b890a8c21879a4aeaf79834edf60bcc7d373ee642fa7f19a12f61b35fa213c"
+        "sha256": "fb4f474c0fc425fad7234066320701481e51ad57d8dac885f7c967f197b1fadb"
       },
       "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
       "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
