@@ -9,6 +9,10 @@ Radeon AI PRO R9700).
   llama.cpp `llama-server` built from pinned upstream source. Exists because
   stock upstream ROCm toolbox images ship an AVX-512 CPU backend that SIGILLs on
   AVX2-only hosts at startup.
+- [`llama-cpp-gfx1201-avx2-rdna-boosts`](llama-cpp-gfx1201-avx2-rdna-boosts/README.md) —
+  the same AVX2 baseline with the vendored `rdna-boosts` patch blocks 00-08
+  applied, on ROCm 7.2.3. **Experimental and unqualified**: exists to test
+  whether the RDNA4 patch series beats the stock build on our workload.
 
 These images use the same manifest, candidate, SBOM/provenance, and digest-only
 promotion gates as the DGX Spark family. Candidate builds run natively on x64

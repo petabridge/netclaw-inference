@@ -24,6 +24,7 @@ runtimes wherever their documented hardware and model requirements fit.
 | [`tensorfold-qwen3-8-flash-gb10`](images/nvidia/dgx-spark/qwen38-flash-tensorfold/README.md) | `linux/arm64` | Two NVIDIA DGX Sparks, TP=2 | Vendored MiaAI-Lab TensorFold recipe plus the Petabridge image prompt reuse patch; hardware qualification pending (GPU test plan outstanding) |
 | [`tensorfold-deepseek-v4-1-flash-1017-gb10`](images/nvidia/dgx-spark/deepseek-v41-flash-1017-tensorfold/README.md) | `linux/arm64` | Three NVIDIA DGX Sparks, TP=3 | Source-build candidate of LakyFx's DS41F 1.2.5 / K2a TensorFold recipe; hardware qualification pending |
 | [`llama-cpp-rocm-gfx1201-avx2`](images/amd/rocm/llama-cpp-gfx1201-avx2/README.md) | `linux/amd64` | AMD RDNA4 (`gfx1201`) hosts, AVX2 CPU baseline | Source-build candidate; hardware qualification pending |
+| [`llama-cpp-rocm-gfx1201-avx2-rdna-boosts`](images/amd/rocm/llama-cpp-gfx1201-avx2-rdna-boosts/README.md) | `linux/amd64` | AMD RDNA4 (`gfx1201`) hosts, AVX2 CPU baseline | Experimental; vendored rdna-boosts blocks 00-08 on ROCm 7.2.3; hardware qualification pending |
 
 The DGX Spark image targets `deepseek-ai/DeepSeek-V4-Flash-0731`. Model weights
 are downloaded separately and should be pinned to the revision recorded in the

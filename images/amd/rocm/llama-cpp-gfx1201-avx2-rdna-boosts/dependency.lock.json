@@ -1,0 +1,120 @@
+{
+  "schema_version": 2,
+  "base_image": {
+    "reference": "rocm/dev-ubuntu-24.04",
+    "tag": "7.2.3",
+    "digest": "sha256:8ab378c7264c7e15496f548392c518a6b2feeb322d6233364c6c2ebc8e7ffb42",
+    "platform": "linux/amd64",
+    "role": "ROCm 7.2.3 toolchain and runtime for gfx1201. Deliberately identical to the sibling production image: the patch series is the only variable under test."
+  },
+  "source_build": {
+    "strategy": "pinned-upstream-source-full-build-plus-vendored-patch-series",
+    "llama_cpp": {
+      "repository": "https://github.com/ggml-org/llama.cpp",
+      "commit": "6050b467c07a95c7b87debd4ddac2f8ba8d9b807",
+      "commit_short": "6050b467c",
+      "commit_date": "2026-10-25T17:46:44Z",
+      "commit_subject": "tests : adjust default threads for test-llama-context (#31157)",
+      "archive": "https://github.com/ggml-org/llama.cpp/archive/6050b467c07a95c7b87debd4ddac2f8ba8d9b807.tar.gz",
+      "archive_sha256": "64a750f710b8cf922d7dd931a1297a9cc236039f7e0f10759e9bfa555966e7ca",
+      "build_system": "cmake",
+      "note": "This is the base the vendored patch series was exported against. It is newer than the sibling image's d812350 pin; the engine bump is unavoidable because the patches are git-am commits against this tree."
+    },
+    "patch_series": {
+      "name": "rdna-boosts",
+      "repository": "https://github.com/stew675/llama-cpp-rdna-boosts",
+      "license": "MIT",
+      "release": "v15-6050b467c-r161",
+      "release_tag": "v15-6050b467c-r161",
+      "release_tag_object": "39d0cb6aedf232f063c68b69e807dc4bcc6a5da6",
+      "release_commit": "ecf48ff08197d92bb88f1642aab72eeefd87cd99",
+      "vendored": true,
+      "vendored_path": "images/amd/rocm/llama-cpp-gfx1201-avx2-rdna-boosts/patches",
+      "checksum_manifest": "patches/SHA256SUMS",
+      "applied_blocks": ["00", "01", "02", "03", "04", "05", "06", "07", "08"],
+      "excluded_blocks": {
+        "09": "host-resident MoE: iface, scheduler, expert cache, staging rings - MoE-only",
+        "10": "slab / fusion dispatcher / async input ring infrastructure - consumed by 09 and 11",
+        "11": "qwen4exp (Qwen3.8-Flash-Next) architecture - different model family",
+        "12": "campaign remainder, mixed bag with no dependency from 00-08",
+        "13": "opt-in MTP draft-vocabulary subset - requires a re-cut GGUF with draft_head tensors",
+        "14": "TEMPORARY relaxed tensor-split mode - tensor split is not used by this deployment"
+      },
+      "why_vendored": "The upstream repository publishes a new release roughly hourly and its main branch is not a stable reference (r158 -> r161 observed inside one working session). Vendoring at a tagged commit keeps the build reproducible and independent of upstream churn.",
+      "why_prefix_only": "Verified by application testing on the pinned base: blocks 05, 08 and 13 fail to apply when blocks 01 and 04 are skipped. Blocks 00-08 are a contiguous prefix and apply cleanly in sequence. Subsets that skip mid-series blocks are not supported."
+    },
+    "native_artifacts": {
+      "mode": "built-from-source",
+      "reason": "Every inference binary in this image is compiled from the pinned llama.cpp commit with the vendored series applied; nothing is inherited prebuilt."
+    }
+  },
+  "build_config": {
+    "gpu_backend": "rocm-hip",
+    "gpu_targets": ["gfx1201"],
+    "gpu_hardware": "AMD Radeon AI PRO R9700 (RDNA4)",
+    "rocm_version": "7.2.3",
+    "cpu_isa_baseline": "x86-64-v3 (AVX, AVX2, FMA, F16C; AVX-512 disabled)",
+    "apt_build_packages": [
+      "build-essential",
+      "cmake",
+      "git",
+      "ca-certificates",
+      "rocblas-dev",
+      "hipblas-dev"
+    ],
+    "cmake_flags": {
+      "GGML_HIP": "ON",
+      "AMDGPU_TARGETS": "gfx1201",
+      "GGML_HIP_ROCWMMA_FATTN": "OFF",
+      "GGML_NATIVE": "OFF",
+      "GGML_AVX": "ON",
+      "GGML_AVX2": "ON",
+      "GGML_FMA": "ON",
+      "GGML_F16C": "ON",
+      "GGML_AVX512": "OFF",
+      "BUILD_SHARED_LIBS": "ON",
+      "CMAKE_PREFIX_PATH": "/opt/rocm",
+      "LLAMA_CURL": "OFF",
+      "LLAMA_BUILD_SERVER": "ON"
+    },
+    "avx512_guard": "The build fails if libggml-cpu contains any AVX-512 (zmm) opcode. Re-proven after patching, because the series touches CPU paths too."
+  },
+  "outputs": {
+    "binaries": ["llama-server", "llama-cli"],
+    "install_prefix": "/opt/llama.cpp"
+  },
+  "model": {
+    "included_in_image": false,
+    "note": "Engine image; GGUF model weights are provided at runtime through a read-only bind mount."
+  },
+  "license": {
+    "repository_material": "MIT",
+    "llama_cpp": "MIT",
+    "patch_series": "MIT",
+    "retained_in_image": [
+      "/opt/llama.cpp/share/doc/llama.cpp/LICENSE",
+      "/usr/share/doc/netclaw-inference/rdna-boosts/LICENSE"
+    ]
+  },
+  "runtime_contract": {
+    "model_loading": {
+      "without_mmap": "--load-mode none",
+      "removed_flags": ["--no-mmap"]
+    },
+    "speculative_decoding": {
+      "embedded_mtp": "--spec-type draft-mtp --spec-draft-n-max 3",
+      "adaptive_mtp": "Available from block 02 as an opt-in alternative: --spec-type draft-mtp-adaptive",
+      "dflash": "Requires a compatible DFlash draft GGUF supplied with --model-draft."
+    },
+    "new_knobs_from_patches": {
+      "GGML_CUDA_GDN_CHUNKED": "block 03 - chunked gated-delta-net prefill; set 0 for A/B against upstream",
+      "GGML_HIP_FA_BAND_WMMA": "block 05 - RDNA4 flash-attention band; this is the knob for head-256 / GQA-6 / q8_0 KV",
+      "GGML_HIP_FA_BAND_WIDE": "block 05",
+      "GGML_HIP_FA_BAND_SPLIT": "block 05",
+      "GGML_HIP_FA_BAND_FETCH_AHEAD": "block 05",
+      "GGML_HIP_FA_BAND_WMMA_GQA_MAX": "block 05"
+    },
+    "build_smoke_check": "Parse representative multimodal MTP serving arguments with --help; no model weights or GPU hardware required. This is the guard against the engine bump removing a flag.",
+    "hardware_qualification": "UNQUALIFIED. Verify readiness, non-empty chat completions, tool calls, vision, memory stability, and decode/prefill throughput against the production baseline before any promotion."
+  }
+}
