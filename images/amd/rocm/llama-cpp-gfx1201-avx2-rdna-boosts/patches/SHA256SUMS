@@ -1,0 +1,9 @@
+95aa6cee0f71c15c3f5dc40067168814cf6c4df29311729a061da8a26746c4d7  ./0000-rdna-boosts-block-00-foundation-band-uniformity-Meta.patch
+5740f87015892a0110c985d316d99501863fa64c18d9c0013a6116db244f2245  ./0001-rdna-boosts-block-01-hybrid-HIP-all-reduce-RDNA4-gat.patch
+400fa04fca2aecf49c8ac49df57abe62f5276bae68771a9736aaad0fac16e3c0  ./0002-rdna-boosts-block-02-adaptive-MTP-draft-depth.patch
+947b621501e5d5aefc757983ed667c9262d96204588347c018d50aa7b164ee6b  ./0003-rdna-boosts-block-03-chunked-gated-delta-net-prefill.patch
+2924a17201c9cfb6f16911b2eb3c5ec7b46b19a68ba090e1578dd7f82159d867  ./0004-rdna-boosts-block-04-BF16-KV-cache-and-native-BF16-f.patch
+d5f9ff0cef6faf76b28a80174908aebf07c720a87485643ee9ea6eda42788ae9  ./0005-rdna-boosts-block-05-flash-attention-band-native-qua.patch
+4899a7d22cfa6f7b339f7859e7a6f6389650cc221370c1fc87e7680013dadf57  ./0006-rdna-boosts-block-06-MMB-quantized-prefill-GEMM.patch
+1c1e800d77d425518e0ed2e6027bfdf1a5c415207d1c78b7f1a780101f6bd778  ./0007-rdna-boosts-block-07-k-quant-boosts-mmvq-VDR-Q6_K-MM.patch
+b0a7ae27eb062660b2ec31218de6cb8b80ad13b692bcf1d0a52d8e3b133d41c6  ./0008-rdna-boosts-block-08-fused-kernels-old-08-fusions-ol.patch

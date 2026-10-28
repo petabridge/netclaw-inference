@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../schemas/image.schema.json",
+  "schema_version": 1,
+  "id": "llama-cpp-rocm-gfx1201-avx2-rdna-boosts",
+  "description": "AVX2-baseline llama.cpp ROCm llama-server for AMD RDNA4 (gfx1201) with the vendored rdna-boosts patch blocks 00-08, on ROCm 7.2.3",
+  "vendor": "amd",
+  "hardware_family": "rocm",
+  "platform": "linux/amd64",
+  "registry_repository": "petabridge/llama-cpp-rocm-gfx1201-avx2-rdna-boosts",
+  "build_enabled": true,
+  "context": "images/amd/rocm/llama-cpp-gfx1201-avx2-rdna-boosts",
+  "dockerfile": "images/amd/rocm/llama-cpp-gfx1201-avx2-rdna-boosts/Dockerfile"
+}

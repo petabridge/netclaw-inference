@@ -7,11 +7,39 @@ images. Every release section lists the image ids affected by that release.
 
 Images:
 
+- `llama-cpp-rocm-gfx1201-avx2-rdna-boosts` (experimental; not promotable until GPU qualification passes)
 - `tensorfold-deepseek-v4-1-flash-1017-gb10` (candidate; not promotable until GPU qualification passes)
 - `tensorfold-qwen3-8-flash-gb10` (candidate; not promotable until GPU qualification passes)
 
 Changes:
 
+- **Add a llama.cpp RDNA4 patched image for big-gpu (`llama-cpp-rocm-gfx1201-avx2-rdna-boosts`, experimental)**
+  - Builds pinned upstream llama.cpp `6050b467c` (2026-10-25) on the
+    **same ROCm 7.2.3 base digest** as the production image and applies the
+    vendored `stew675/llama-cpp-rdna-boosts` patch blocks 00-08 from release
+    `v15-6050b467c-r161` (commit `ecf48ff0`, MIT).
+  - Blocks 00-08 are a contiguous prefix and are the only subset that applies:
+    application testing on the pinned base showed blocks 05, 08 and 13 fail when
+    blocks 01 and 04 are skipped. Blocks 09-14 are excluded (host-resident MoE,
+    slab infrastructure, the qwen4exp architecture, a mixed campaign remainder,
+    an opt-in draft-vocab subset needing a re-cut GGUF, and a temporary
+    tensor-split relaxation); each exclusion is recorded in the lock file.
+  - The series is **vendored** rather than fetched: the upstream repository
+    published three releases inside one working session and its `main` branch is
+    not a stable reference. Every patch's SHA-256 is in `patches/SHA256SUMS` and
+    is re-verified during the build before any patch is applied.
+  - The base tree is committed before `git am --3way`, which needs a real
+    ancestor; a bare `git init` fails with "could not build fake ancestor"
+    (verified — the first draft of the recipe failed exactly this way).
+  - The AVX2 baseline guard and the `--help` serving-contract check are both
+    re-run after patching, because the series touches CPU paths and moves the
+    engine forward from `d812350`.
+  - The image changes two variables (engine commit and patches) by necessity:
+    the patches are `git am` commits against `6050b467c` and will not apply to
+    the older v0.6.0 tree. Qualification must account for that.
+  - Not built or run on GPUs. The build is enabled so a `sha-<commit>` candidate
+    can be qualified on big-gpu; promotion waits until decode, prefill,
+    tool-call, vision and memory tests pass against the production baseline.
 - **Fix the DeepSeek V4.1 Flash 1017 candidate build:** install curl
   (8.5.0-2ubuntu10.16, from the pinned snapshot) in the NCCL and tools stages.
   NVIDIA's CUDA images purge curl after setup, so the first candidate build

@@ -1,0 +1,2134 @@
+From 5323cb6cc476676f9a7fd486ec69af0922e02185 Mon Sep 17 00:00:00 2001
+From: Stew Forster <ci@rdna-boosts.invalid>
+Date: Sat, 24 Oct 2026 09:35:46 -0500
+Subject: [PATCH 02/14] rdna-boosts: block 02: adaptive MTP draft depth
+
+Sources: old 01 (whole block).
+
+Amended r118 (PR #206, @briansp2020): with LLAMA_MTP_INGEST_TAIL set, a prompt ubatch that lies entirely
+below the ingested tail no longer costs a target readback and a full synchronize.  The MTP hook returns
+before its getters, and llama_get_embeddings_nextn[_ith]() call ctx->synchronize(), so the host used to
+wait for both backends to drain after every prompt ubatch before it built the next one; the target also
+copied that ubatch's nextn hidden state to the host (21 MB per 2048-row ubatch on Flash-Next) and waited
+for it.  New staging API llama_set_embeddings_nextn_from(ctx, seq, pos) (default 0 = every row, so other
+callers are unchanged) marks the rows that are never read: an ingested row p reads h(p - 1), and any
+ubatch holding a row at pos >= ingest_from - 1 is never skipped.  Measured on a 31.5k-token prompt (2x
+R9700, tail 4096): prefill 1488.6 -> 1509.8 t/s (+1.4 %, 95 % CI +0.9..+1.9), of which the hook half is
+about +0.6 % and the readback half about +0.1 %; identical greedy text and identical draft counts (177
+accepted / 364 generated), decode flat, prefill logits bit-identical, and no change at all with the
+variable unset.  LLAMA_MTP_TAIL_READBACK=0 is the kill-switch (both halves).
+
+Amended r125 (issue #216): the draft KV cache type now FOLLOWS the main -ctk / -ctv unless the
+draft type was set explicitly (-ctkd / -ctvd / their env vars), instead of upstream's unconditional
+f16 default.  The draft only proposes (the target verifies), so the greedy text is byte-identical
+either way, while the draft context's KV shrinks with the main cache: on a dense 27B MTP run at
+-c 131072 the draft's single attention layer held 512 MiB of f16 KV against 144 MiB at q4_0 -- 368
+MiB a 16 GiB card cannot spare.  Decode is unchanged within noise -- the quantized draft cache just takes the native quantized-KV FA arm
+(block 05): three alternating reps per arm gave 56.4-56.6 (f16) vs 56.4-56.5 t/s (q4_0) at -c 8192 -n 400,
+and 80.8-80.9 vs 80.6-80.7 t/s at -c 102400 -n 3000 (protocol A scale), with ROCBLAS_USE_HIPBLASLT=0.  The
+same-seed greedy text is identical across the two draft KV types and to --spec-type none on all four
+protocol-A axes (R/P/C/K, -n 3000).  Issue #216.
+
+Amended r153 (issue #234, @overdoingism): align the drafts of the sequences that verify in the same step.
+llama_memory_hybrid::init_batch() splits a decode batch with llama_batch_allocr::split_equal(), which takes
+one token per sequence set per round and STOPS when the shortest set runs out, so the longer sequence's
+drafted tail becomes a SECOND ubatch and the target model runs a full extra pass for that one step.  The fixed
+--spec-draft-n-max path never produced a length difference (every slot drafts n_max), which is why this
+survived, but the adaptive controller holds a PER-SEQUENCE depth: two verifying slots routinely disagree and
+one decode becomes two passes.  draft-mtp-adaptive now gives every drafting sequence the same cap for the call:
+the deepest cap among them, bounded by the smallest HARD cap in the call (--spec-draft-n-max, the MTP layer cap
+and the caller's per-slot n_max, which the server lowers as a response runs out of tokens) and by the expert
+cache's verify band.  So no sequence is ever asked for more than it would draft when it runs alone; the only
+case where a width shrinks is the smallest-hard-cap bound (a response nearing its end), which is transient and
+keeps the pair in one ubatch.  Inert with a single drafting sequence, which is every llama-cli / MTP gate run.
+Padding the shorter sequence instead is not an option: a padded row advances the recurrent state in
+mem_recr->prepare().
+
+Amended r154 (issue #234): the alignment stays INSIDE the drafter whose caps it changes.  r153 also shipped a
+generic "cut the finished drafts to the shortest" in common_speculative_draft(); measured on the issue
+reporter's own chain (--spec-type ngram-mod,draft-dflash with a DFlash2 draft, 27B, 2 GPU, recall + prose,
+-n 200) that is a LOSS: the cut fires on every step whose n-gram match is shorter than the DFlash block,
+truncates the OTHER slot's good draft, and the pair aggregates 65.6 -> 61.7 t/s (-6 %) while the prose slot's
+acceptance falls 74 % -> 50 % (splits 12 -> 1, and the lost proposals cost far more than the removed pass).
+The cut is right only for a mismatch a CAP caused, which align_draft_caps() handles inside the one drafter
+whose caps those are, so it and common_speculative_impl::draft_truncated() are gone and a chain of different
+drafters keeps its previous behaviour exactly (measured inert: 64.6 vs 64.4 t/s, identical draft counts).
+scripts/gate-spec-align.sh grows a --spec-type ngram-mod,draft-dflash arm that fails if the knob is not inert
+there, so this cannot ship again.
+
+Measured (Qwen3.8-27B UD-Q4_K_XL, 2 GPU on the x8 root ports, -sm tensor --parallel 2 --kv-unified -c 32768,
+greedy, n_predict 400, aggregate t/s of a concurrent high- and low-acceptance pair): 104.8-108.3 -> 140.1-140.6
+(+30..34 %), per slot 72-74/57-60 -> 112/76; at 3 GPUs 86.5-87.0 -> 133.1-133.7 (+54 %); on the host-expert
+shape (35B-A3B UD-Q4_K_M -ncmoe 40) 116.2-116.3 -> 147.7-149.0 (+28 %).  The decode steps that split read 58
+before and 0 after at every one of those shapes (llama_memory_recurrent's RSPREP trace).  The equal-length arm
+(two identical prompts) is unchanged (-0.4..-2.1 %), a fixed draft-mtp n3 pair measures 143.9 so the fix
+reaches the equal-length checkpoint within 2 %, and a single drafting sequence is untouched by construction and
+measured: the n_seq == 1 llama-cli text is byte-identical on/off, as is every single-slot server request.  The
+two-slot pair's low-acceptance slot verifies at its neighbour's width, so the flag's two values are two numeric
+CONFIGS -- exactly as --spec-draft-n-max 4 and 5 are -- and GREEDY-PURITY.md's promise is greedy text per
+config, not equality between configs.  Measured so that this is not read as noise: every arm reproduces its
+text character for character across runs (4/4 at 2 GPUs, 2/2 at 3 GPUs and on the host-expert arm), the on/off
+divergence lands on the same character every time, and a fixed draft-mtp pair at depth 5 against depth 4 moves
+the same slot the same way with no alignment in play.  The token rule is untouched: every emitted token is
+still the target's own greedy sample at that position.  A multi-slot server upgraded across this change can
+therefore produce different, equally valid text.  LLAMA_SPEC_ALIGN=0 is the kill switch.  Gate:
+scripts/gate-spec-align.sh (2 and 3 GPUs, the host-expert arm and a mixed-drafter arm).  Issue #234.
+---
+ common/arg.cpp                                |  56 ++-
+ common/common.cpp                             |  99 ++++-
+ common/common.h                               |  43 +-
+ common/speculative-adaptive.h                 | 142 +++++++
+ common/speculative.cpp                        | 380 +++++++++++++++++-
+ common/speculative.h                          |   9 +
+ docs/speculative.md                           |   9 +-
+ .../speculative-simple/speculative-simple.cpp |   4 +
+ ggml/src/ggml-cuda/ggml-cuda.cu               |   2 +-
+ include/llama.h                               |   1 +
+ src/llama-context.cpp                         |  53 ++-
+ src/llama-context.h                           |   2 +
+ src/llama-cparams.h                           |   1 +
+ src/llama-ext.h                               |  12 +
+ src/llama-model.cpp                           |   8 +
+ src/llama-model.h                             |   3 +
+ src/models/delta-net-base.cpp                 |  11 +-
+ tests/CMakeLists.txt                          |  23 ++
+ tests/test-arg-parser.cpp                     |  17 +
+ tests/test-recurrent-state-depth.cpp          | 215 ++++++++++
+ tests/test-speculative-adaptive.cpp           | 237 +++++++++++
+ tools/cli/README.md                           |   3 +-
+ tools/server/README.md                        |   3 +-
+ tools/server/server-context.cpp               |  15 +-
+ 24 files changed, 1294 insertions(+), 54 deletions(-)
+ create mode 100644 common/speculative-adaptive.h
+ create mode 100644 tests/test-recurrent-state-depth.cpp
+ create mode 100644 tests/test-speculative-adaptive.cpp
+
+diff --git a/common/arg.cpp b/common/arg.cpp
+index e72a86311..c9f3db0fb 100644
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -363,9 +363,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
+     common_download_hf_plan plan_spec;
+     common_download_opts opts;
+ 
+-    const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
+-                                        params.speculative.types.end(),
+-                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
++    const bool spec_type_draft_mtp = params.speculative.has_mtp();
+ 
+     const bool spec_type_draft_dflash = std::find(params.speculative.types.begin(),
+                                            params.speculative.types.end(),
+@@ -4141,12 +4139,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+         string_format(
+             "KV cache data type for K for the draft model\n"
+             "allowed values: %s\n"
+-            "(default: %s)",
+-            get_all_kv_cache_types().c_str(),
+-            ggml_type_name(params.speculative.draft.cache_type_k)
++            "(default: follows the main model's --cache-type-k, so lowering the main KV type for VRAM "
++            "takes the draft with it; set this to pin the draft's own type)",
++            get_all_kv_cache_types().c_str()
+         ),
+         [](common_params & params, const std::string & value) {
+-            params.speculative.draft.cache_type_k = kv_cache_type_from_str(value);
++            params.speculative.draft.cache_type_k     = kv_cache_type_from_str(value);
++            params.speculative.draft.cache_type_k_set = true;
+         }
+     ).set_env("LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K"));
+     add_opt(common_arg(
+@@ -4154,12 +4153,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+         string_format(
+             "KV cache data type for V for the draft model\n"
+             "allowed values: %s\n"
+-            "(default: %s)",
+-            get_all_kv_cache_types().c_str(),
+-            ggml_type_name(params.speculative.draft.cache_type_v)
++            "(default: follows the main model's --cache-type-v, so lowering the main KV type for VRAM "
++            "takes the draft with it; set this to pin the draft's own type)",
++            get_all_kv_cache_types().c_str()
+         ),
+         [](common_params & params, const std::string & value) {
+-            params.speculative.draft.cache_type_v = kv_cache_type_from_str(value);
++            params.speculative.draft.cache_type_v     = kv_cache_type_from_str(value);
++            params.speculative.draft.cache_type_v_set = true;
+         }
+     ).set_env("LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V"));
+     add_opt(common_arg(
+@@ -4188,11 +4188,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+ 
+     add_opt(common_arg(
+         {"--spec-draft-n-max"}, "N",
+-        string_format("number of tokens to draft for speculative decoding (default: %d)", params.speculative.draft.n_max),
++        string_format("number of tokens to draft for speculative decoding (default: %d, max: 15)", params.speculative.draft.n_max),
+         [](common_params & params, int value) {
+             if (value < 0) {
+                 throw std::invalid_argument("invalid value");
+             }
++            // Values above 15 are clamped, and values above 7 get a purity notice, in
++            // common_init_from_params - not here: argument-parser callbacks cannot know the final
++            // verbosity, and the notice belongs with the other range validation.  The 15 cap is the
++            // recurrent rollback snapshot bound (a verify batch decodes n_max + 1 rows and is a
++            // K <= 16 batch); above 7 the flash-attention chooser switches kernel family above 8
++            // rows, which can change greedy output between --spec-type none and draft-mtp.  Both
++            // notices are W level: llama-server's default INFO threshold shows them, while
++            // llama-cli's default ERROR threshold hides them (-lv 2 to see them).
+             params.speculative.draft.n_max = value;
+         }
+     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MAX"));
+@@ -4213,6 +4221,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+             params.speculative.draft.n_ubatch = value;
+         }
+     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_UBATCH"));
++    add_opt(common_arg(
++        {"--spec-draft-n-min-adaptive"}, "N",
++        string_format("minimum adaptive MTP draft depth; the depth never drops below it (the default cold start is three steps below --spec-draft-n-max, bounded by this floor) (default: %d)", params.speculative.draft.n_min_adaptive),
++        [](common_params & params, int value) {
++            if (value < 1) {
++                throw std::invalid_argument("invalid value");
++            }
++            params.speculative.draft.n_min_adaptive = value;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN_ADAPTIVE"));
++    add_opt(common_arg(
++        {"--spec-draft-n-start"}, "N",
++        "initial adaptive MTP draft depth: the first verify round of each generation starts here "
++        "instead of the default cold start.  Clamped to [--spec-draft-n-min-adaptive, "
++        "--spec-draft-n-max].  Use it to start deeper when the workload settles high (e.g. "
++        "verbatim recall) or shallower for a short generation at a deep context, where a wide "
++        "verify batch costs more.  Unset: three steps below the ceiling, bounded by the floor.",
++        [](common_params & params, int value) {
++            if (value < 1) {
++                throw std::invalid_argument("invalid value");
++            }
++            params.speculative.draft.n_start = value;
++        }
++    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_START"));
+     add_opt(common_arg(
+         {"--spec-synth-len"}, "L",
+         "target mean synthetic acceptance length, including the target token (benchmarking only)",
+diff --git a/common/common.cpp b/common/common.cpp
+index 3237c0fa7..953a58ec8 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -1257,8 +1257,7 @@ common_init_result::common_init_result(common_params & params, bool model_only)
+ 
+         // the draft context is created from the same base params and follows the main context, fit both together
+         const bool has_draft = params.speculative.has_dft();
+-        const bool spec_mtp  = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+-            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
++        const bool spec_mtp  = params.speculative.has_mtp();
+ 
+         common_params params_dft = common_base_params_to_speculative(params);
+ 
+@@ -1378,7 +1377,30 @@ common_init_result::common_init_result(common_params & params, bool model_only)
+         cparams.n_samplers = pimpl->samplers_seq_config.size();
+     }
+ 
++    // a DFlash draft turns on the extraction of some target layers' inputs when it attaches, after this context and its
++    // warm-up: take those layers from the draft's GGUF now, so the first graph reserve already sizes the compute
++    // buffers for them (otherwise they are freed and allocated again, larger, at the first request)
++    if (params.speculative.has_dft() && std::any_of(params.speculative.types.begin(), params.speculative.types.end(), [](auto t) {
++            return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK; })) {
++        gguf_init_params gp = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
++        if (gguf_context * g = gguf_init_from_file(params.speculative.draft.mparams.path.c_str(), gp)) {
++            std::vector<int32_t> lids;
++            const int64_t ka = gguf_find_key(g, "general.architecture");
++            const int64_t kl = ka >= 0 ? gguf_find_key(g, (std::string(gguf_get_val_str(g, ka)) + ".target_layers").c_str()) : -1;
++            if (kl >= 0 && gguf_get_kv_type(g, kl) == GGUF_TYPE_ARRAY &&
++                (gguf_get_arr_type(g, kl) == GGUF_TYPE_INT32 || gguf_get_arr_type(g, kl) == GGUF_TYPE_UINT32)) {
++                const int32_t * d = (const int32_t *) gguf_get_arr_data(g, kl);
++                lids.assign(d, d + gguf_get_arr_n(g, kl));
++            }
++            gguf_free(g);
++            if (!lids.empty()) {
++                llama_model_set_embeddings_layer_inp_preset(model, lids.data(), (uint32_t) lids.size());
++            }
++        }
++    }
++
+     llama_context * lctx = llama_init_from_model(model, cparams);
++    llama_model_set_embeddings_layer_inp_preset(model, nullptr, 0); // only this context: not an MTP draft context made later
+     if (lctx == NULL) {
+         COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
+         return;
+@@ -1425,6 +1447,76 @@ static void common_batch_set_zero_state(common_batch & batch, const llama_model
+ }
+ 
+ common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
++    // --spec-draft-n-max is capped at 15 (a clamp, not an error).  There are two independent
++    // bounds, and they have different severities:
++    //
++    // 1. correctness - recurrent rollback coverage.  A verify batch decodes n_max + 1 query rows
++    //    and a partial accept rolls the recurrent (chunked-GDN) state back into that same batch.
++    //    The sequential GDN kernel writes n_rs_seq + 1 = n_max + 1 rollback snapshots, and the
++    //    whole-batch chunked kernel threshold is floored at max(K, 16, n_rs_batch) with
++    //    n_rs_batch = n_max + 1, so every verify batch runs the sequential kernel and restores
++    //    snapshots it wrote.  The "16" in that floor is the constant the K-independent chunked
++    //    path was built around (K <= 16, i.e. n_max <= 15); a deeper draft makes K the active
++    //    floor and re-introduces the K-dependent prefill/verify boundary.  This bound is hard,
++    //    which is why the clamp stays at 15.  (test-rs-depth, the deterministic snapshot sweep,
++    //    is green for n_rs_seq 1..15 on qwen35 / dsv4 / kimi-k3 / qwen4exp, including deep
++    //    drafts n_tokens = n_rs_batch > K.)
++    //
++    // 2. greedy purity - kernel-family switches at 8 rows.  A verify wider than 8 rows changes
++    //    kernel family in more than one place: the HIP FA chooser switches from the tile kernel
++    //    to the MMA/WMMA kernel above 8 query rows (ggml/src/ggml-cuda/fattn.cu, the Q->ne[1] > 8
++    //    switch), and the matmuls switch from the MMVQ/MMVF families (ncols <= MMVQ_MAX_BATCH_SIZE
++    //    = 8) to MMQ.  None of these families is bit-identical to the W=1 kernel, so a verify of
++    //    more than 8 rows can disagree with a W=1 decode on a greedy near-tie (measured 2026-09-13:
++    //    27B UD-Q4_K_XL, W=1..8 one logits hash and W=9..16 another, with FA disabled too, so it is
++    //    not only the FA chooser).  This is a trade, not a correctness bound: depth 8..15 keeps the
++    //    throughput win (measured 2026-09-13: 27B UD-Q4_K_XL recall n_max 15 = 116 t/s vs 71 at
++    //    n_max 7) and only risks a near-tie flip, so it is allowed with a warning-level notice.
++    //    qwen4exp also had its own QSA decode arm flip at W > 8 (dense below, sparse above) on top
++    //    of these; the arm is now band-matched to the verify width (src/models/qwen4exp.cpp), so
++    //    that larger dense-vs-sparse divergence is gone and only the kernel-family near-ties remain.
++    //
++    // The clamp lives here rather than in the argument parser so it runs once, after the final
++    // verbosity is known, and before the model/context are created (both see the capped depth).
++    // The notices are W level: llama-server's default INFO threshold shows them, while llama-cli's
++    // default ERROR threshold hides them (-lv 2 to see them).  See GREEDY-PURITY.md 11 and 19.
++    //
++    // LLAMA_SPEC_DRAFT_N_MAX_CLAMP=0 opts out for experiments: the depth is then honoured as given
++    // (with a warning).
++    if (params.speculative.draft.n_max > 7) {
++        static const bool clamp_enabled = []() {
++            const char * env = getenv("LLAMA_SPEC_DRAFT_N_MAX_CLAMP");
++            return env == nullptr || atoi(env) != 0;
++        }();
++        if (params.speculative.draft.n_max > 15) {
++            if (clamp_enabled) {
++                // WRN: the clamp is a notice, not a failure, and the run continues.  Visibility
++                // note: llama-server's default INFO threshold shows it, while llama-cli's default
++                // ERROR threshold hides it (-lv 2 to see it).
++                LOG_WRN("--spec-draft-n-max %d exceeds the maximum of 15; clamping to 15 (a deeper "
++                        "verify batch is no longer covered by the recurrent rollback snapshot set).  "
++                        "Set LLAMA_SPEC_DRAFT_N_MAX_CLAMP=0 to keep %d if you accept that risk.\n",
++                        params.speculative.draft.n_max, params.speculative.draft.n_max);
++                params.speculative.draft.n_max = 15;
++            } else {
++                LOG_ERR("--spec-draft-n-max %d is above the supported maximum of 15 and "
++                        "LLAMA_SPEC_DRAFT_N_MAX_CLAMP=0 is set: keeping it.  A verify batch deeper "
++                        "than the recurrent snapshot set is not guaranteed to restore a correctly "
++                        "decoded boundary which may lead to incoherent model output.\n",
++                        params.speculative.draft.n_max);
++            }
++        }
++        if (params.speculative.draft.n_max > 7) {
++            // WRN: this is a trade, not a failure, and the run continues.  Reported as four
++            // separate warnings so each line stays short and readable in a terminal.
++            LOG_WRN("--spec-draft-n-max %d is above 7. While drafts this deep are supported, a verify batch of\n",
++                    params.speculative.draft.n_max);
++            LOG_WRN("%s", "more than 8 rows takes different flash-attention and matmul kernels. This means that\n");
++            LOG_WRN("%s", "the speculative drafter's output may drift non-deterministically on occasion. The output\n");
++            LOG_WRN("%s", "of the model still remains valid and coherent however.  Continuing...\n");
++        }
++    }
++
+     common_init_result_ptr res(new common_init_result(params, model_only));
+ 
+     llama_model * model = res->model();
+@@ -1712,7 +1804,8 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
+     mparams.progress_callback           = params.load_progress_callback;
+     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
+     mparams.no_alloc                    = params.no_alloc;
+-    mparams.load_mtp                    = params.load_mtp || std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
++    // upstream's explicit --load-mtp (post-base, #14891) OR our adaptive/MTP type detection
++    mparams.load_mtp                    = params.load_mtp || params.speculative.has_mtp();
+ 
+     return mparams;
+ }
+diff --git a/common/common.h b/common/common.h
+index 70d6a671f..38998e2dd 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -172,18 +172,19 @@ enum common_params_sampling_config : uint64_t {
+ };
+ 
+ enum common_speculative_type {
+-    COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
+-    COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
+-    COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
+-    COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
+-    COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
+-    COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,  // DSpark speculative decoding (DFlash + Markov head)
+-    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
+-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
+-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
++    COMMON_SPECULATIVE_TYPE_NONE,                   // no speculative decoding
++    COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,            // standalone draft model speculative decoding
++    COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,            // Eagle3 speculative decoding
++    COMMON_SPECULATIVE_TYPE_DRAFT_MTP,               // Multi-token prediction
++    COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE,      // MTP with adaptive draft depth
++    COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,            // DFlash speculative decoding
++    COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,            // DSpark speculative decoding (DFlash + Markov head)
++    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,            // simple self-speculative decoding based on n-grams
++    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,             // self-speculative decoding with n-gram keys only
++    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,           // self-speculative decoding with n-gram keys and 4 m-gram values
+     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
+-    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+-    COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
++    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,             // self-speculative decoding with 3-level n-gram cache
++    COMMON_SPECULATIVE_TYPE_COUNT                    // number of types, unknown type
+ };
+ 
+ // Grammar type enumeration
+@@ -328,6 +329,8 @@ struct common_params_model {
+ struct common_params_speculative_draft {
+     int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
+     int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
++    int32_t n_min_adaptive = 3; // minimum adaptive MTP draft depth (the default cold start is three steps below --spec-draft-n-max, bounded by this floor)
++    int32_t n_start        = 0; // explicit initial adaptive MTP draft depth; 0 = the default (clamped to [n_min_adaptive, n_max])
+ 
+     float p_split = 0.1f; // speculative decoding split probability
+     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
+@@ -348,6 +351,12 @@ struct common_params_speculative_draft {
+     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
+     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+ 
++    // set by -ctkd / -ctvd (or their env vars).  Unset means the draft context FOLLOWS the main
++    // -ctk / -ctv, so dropping the main KV type for VRAM takes the draft with it (issue #216: the
++    // f16 default was invisible and cost 368 MiB of draft KV at -c 131072 on a 27B MTP run).
++    bool cache_type_k_set = false;
++    bool cache_type_v_set = false;
++
+     common_cpu_params cpuparams;
+     common_cpu_params cpuparams_batch;
+ 
+@@ -394,13 +403,21 @@ struct common_params_speculative {
+         return !draft.mparams.empty();
+     }
+ 
++    bool has_mtp() const {
++        return std::any_of(types.begin(), types.end(), [](auto t) {
++            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE;
++        });
++    }
++
+     bool has_synth() const {
+         return synth_len != -1.0 || !synth_rates.empty();
+     }
+ 
+     uint32_t need_n_rs_seq() const {
+-        bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
+-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
++        bool needs_rs_seq = has_mtp() || std::any_of(types.begin(), types.end(), [](auto t) {
++            return t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
++                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ||
++                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+         });
+ 
+         return needs_rs_seq ? draft.n_max : 0u;
+diff --git a/common/speculative-adaptive.h b/common/speculative-adaptive.h
+new file mode 100644
+index 000000000..1f8e8a6b5
+--- /dev/null
++++ b/common/speculative-adaptive.h
+@@ -0,0 +1,142 @@
++#pragma once
++
++#include <algorithm>
++
++// Adaptive draft depth controller for MTP speculative decoding (draft-mtp-adaptive).
++//
++// Single credit-bucket state machine. Every verification result moves a bucket B
++// by (n_accepted - depth), except that a full accept (n_accepted >= depth) is
++// flipped to add max(1, n_accepted - 1) instead: a deeper or longer accept is
++// worth more, so climbing accelerates with depth.  Feeding another speculator's
++// rounds (ngram-mod) into this bucket was measured and is deliberately NOT done
++// (see common_speculative_impl_draft_mtp::accept): with this controller's
++// cap - 3 cold start the feed is a no-op, and a weak ngram win on novel content
++// is not evidence about the MTP content.  Any shortfall drains
++// depth - n_accepted, i.e. a miss of k tokens subtracts k. There is no special
++// case for truncated drafts: a p_min-truncated draft is just a miss of the
++// tokens it came up short, which keeps the controller honest about the depth
++// it actually holds.
++//
++// B starts at the drop pressure D = max(60, 10*depth) on every depth change.
++// When B reaches the cap T = D + climb_budget() the depth climbs one step; when
++// B falls to 0 the depth drops one step. The surplus above the cap (bounded at
++// the depth, so at most one step per update) carries into the new depth's
++// bucket, and a deficit below zero carries down the same way, instead of being
++// discarded.
++//
++// The bucket's drift (its expected change per verification round) is what
++// locates the right depth, and its zero-crossing lands on the throughput
++// optimum of every workload measured: code ~9, reasoning/prose/phase-switching
++// at the floor, verbatim recall at the ceiling. That is the property the credit
++// function above buys, and it needs no tuning. The constants do, because the
++// delivery's acceptance is higher than mainline's and therefore raises the
++// drift at every depth, which turns a careful upstream compromise into a
++// trigger-happy one at the top of the range:
++//
++//   * climb_budget grows with depth, 20 + 6*(depth - 1). A flat 20 is small
++//     enough that a lucky streak of full accepts fills the bucket, and because
++//     the credit grows with depth the next few accepts cascade the depth up
++//     several steps (measured: 9 -> 10 -> 11 -> 12 in 16 rounds after six
++//     consecutive full accepts at depth 8, then a slow drain back down). A
++//     depth-scaled budget makes the top of the range resist a streak the way
++//     the floor already does.
++//
++//   * drop_pressure is steeper, max(60, 10*depth) rather than max(20, 4*depth),
++//     which damps the slow 6 <-> 12 limit cycle the flat budget produced
++//     (measured 40 depth changes in 477 verification rounds, and each change
++//     costs a rollback and a re-draft).
++//
++//   * the cold start is cap - 3 rather than the floor. The expensive direction
++//     is the climb: off the floor a step costs ~20 net full accepts, and the
++//     controller burned a third of a 3000-token run reaching the plateau --
++//     which is the entire advantage of a higher ceiling. Settling *down* is
++//     cheap even for a workload whose equilibrium is the floor, because its
++//     drift is strongly negative up there, so starting near the plateau costs a
++//     reasoning or mixed workload almost nothing while a code workload starts
++//     on its optimum.  The start is only the entry point of the drift, so it
++//     can be overridden per context with --spec-draft-n-start (clamped to
++//     [floor, cap]) -- a workload generated at a deep context pays more for a
++//     wide verify batch than one generated shallow, and there the lower start
++//     wins.
++struct common_speculative_adaptive {
++    int n_cur    = 0; // current adaptive draft depth N
++    int n_bucket = 0; // accumulated bucket: net accepted surplus over the depth
++
++    // accumulated (n_cur - n_accepted) needed to drop one step from depth N
++    int drop_pressure(void) const {
++        return std::max(60, n_cur * 10);
++    }
++
++    // net full-accept-equivalents needed to climb one step from depth N; grows
++    // with depth so one lucky streak cannot cascade the depth upward
++    int climb_budget(void) const {
++        return 20 + 6 * (n_cur - 1);
++    }
++
++    // bucket cap: drop pressure plus the climb budget, so climbing from the
++    // reset point costs climb_budget() net full-accept-equivalents
++    int bucket_cap(void) const {
++        return drop_pressure() + climb_budget();
++    }
++
++    // cold start; the default is three steps below the ceiling, bounded by the
++    // floor, and n_start > 0 overrides it (--spec-draft-n-start, clamped to
++    // [floor, cap]); the drift then settles the depth in whichever direction the
++    // workload calls for
++    void reset(int n_max, int n_min_adaptive, int n_start = 0) {
++        const int cap   = std::max(1, n_max);
++        const int floor = std::max(1, n_min_adaptive);
++
++        n_cur    = n_start > 0 ? std::min(cap, std::max(floor, n_start))
++                               : std::min(cap, std::max(floor, cap - 3));
++        n_bucket = drop_pressure();
++    }
++
++    // feed one verification result from this implementation's own draft:
++    // n_accepted is the number of tokens the target accepted this round.  A
++    // round whose accepted draft came from another speculator (ngram-mod) is
++    // NOT fed -- see common_speculative_impl_draft_mtp::accept() and the note
++    // at the top of this file
++    void update(int n_accepted, int n_max, int n_min_adaptive) {
++        const int cap   = std::max(1, n_max);
++        const int floor = std::max(1, n_min_adaptive);
++
++        int delta;
++
++        if (n_accepted >= n_cur) {
++            delta = std::max(1, n_accepted - 1);
++        } else {
++            delta = n_accepted - n_cur;
++        }
++
++        n_bucket += delta;
++
++        // At the bucket boundaries adjust the current depth if possible. Otherwise
++        // both n_cur and n_bucket always get clamped to their minimum/maximum values.
++        // The surplus above the cap (clamped at the depth, so at most one climb per
++        // update) carries into the new depth's bucket, and a deficit below zero
++        // carries down the same way, instead of being discarded
++        if (n_bucket >= bucket_cap()) {
++            // At or above the high water mark
++            if (n_cur < cap) {
++                n_bucket = std::min(n_bucket, bucket_cap() + n_cur);
++                n_bucket -= bucket_cap();
++                n_cur++;
++                n_bucket += drop_pressure();
++            } else {
++                n_cur = cap;
++                n_bucket = bucket_cap();
++            }
++        } else if (n_bucket <= 0) {
++            // At or below low water mark
++            if (n_cur > floor) {
++                n_bucket -= drop_pressure();
++                n_cur--;
++                n_bucket += bucket_cap();
++            } else {
++                n_cur = floor;
++                n_bucket = 0;
++            }
++        }
++    }
++};
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index 1e1bf94e8..ab342260d 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -9,6 +9,7 @@
+ #include "ngram-map.h"
+ #include "ngram-mod.h"
+ #include "sampling.h"
++#include "speculative-adaptive.h"
+ 
+ #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
+ 
+@@ -76,6 +77,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
+     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
+     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
+     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
++    {"draft-mtp-adaptive", COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE},
+     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
+     {"draft-dspark",  COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK},
+     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
+@@ -172,6 +174,39 @@ bool common_speculative_are_compatible(
+ 
+ using common_speculative_draft_params_vec = std::vector<common_speculative_draft_params>;
+ 
++// TODO #234: verify-batch alignment across the sequences drafted in one call (see align_draft_caps()).
++//
++// `llama_memory_hybrid::init_batch()` splits a decode batch with `llama_batch_allocr::split_equal()`, which
++// takes one token per sequence set per round and STOPS when the shortest set runs out.  Every sequence that
++// verifies in the same step must therefore present the SAME row count (its sampled token plus its draft);
++// otherwise the longer sequence's drafted tail becomes a SECOND ubatch and the target model runs a full
++// extra pass for that one step.  Nothing in the fixed-depth path produced a difference (every slot drafted
++// `n_max`), but the adaptive controller holds a per-sequence depth, so two verifying slots routinely
++// disagree and one decode becomes two passes.  Measured on the r152 tree (Qwen3.8-27B UD-Q4_K_XL, 2x R9700
++// on the x8 root ports, `-sm tensor --parallel 2 --kv-unified -c 32768 -fa on`, greedy, `n_predict 400`):
++// two slots at DIVERGING adaptive depths aggregate 108.1 t/s against 145.6 t/s for two slots whose drafts are
++// the same length (73.5/57.5 vs 98.5/78.5 per slot), and at 3 GPUs 86.9 vs 132.2 t/s.  Same two prompts, so
++// the whole difference is the split.  Padding the shorter sequence to the same length is NOT an option: a
++// padded row advances the recurrent state in `mem_recr->prepare()`.
++//
++// So: a drafter that chooses its own length per sequence (`draft-mtp-adaptive`) aligns its sequences' caps to
++// one width in the call, which is `align_draft_caps()`.  It is deliberately NOT a cut of the finished drafts
++// to the shortest one: that was measured and it is a LOSS wherever the lengths differ because of CONTENT
++// rather than a cap.  On the reporter's own chain (`--spec-type ngram-mod,draft-dflash` with a DFlash2 draft,
++// 27B, 2 GPU, recall + prose, `-n 200`) the `min` cut fires on every step whose n-gram match is shorter than
++// the DFlash block, truncates the OTHER slot's good draft, and the pair aggregates 65.6 -> 61.7 t/s (-6 %)
++// while the prose slot's acceptance falls 74 % -> 50 %: splits 12 -> 1, and the lost proposals cost far more
++// than the removed pass.  The cut is right only for a mismatch a CAP caused (the band bound, or a slot that is
++// running out of tokens), which `align_draft_caps()` handles inside the one drafter whose caps those are.
++// Every part of it is inert with a single drafting sequence, which is every `llama-cli` / MTP gate run.
++static bool spec_align_enabled() {
++    static const bool enabled = []() {
++        const char * env = getenv("LLAMA_SPEC_ALIGN");
++        return env == nullptr || atoi(env) != 0;
++    }();
++    return enabled;
++}
++
+ // state of an implementation of speculative decoding
+ //
+ // each implementation has a unique type and a state that is implementation-specific
+@@ -208,10 +243,17 @@ struct common_speculative_impl {
+ 
+     virtual bool process(const common_batch & batch) = 0;
+ 
++    // optional: the prompt of `seq_id` about to be processed ends at position `n_prompt` (exclusive)
++    virtual void set_prompt_end(llama_seq_id /*seq_id*/, llama_pos /*n_prompt*/) {}
++
+     virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
+ 
+     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) = 0;
+ 
++    // optional: report a partial acceptance that the context could not apply
++    // (checkpoint-restore path); accept() will not be called for that round
++    virtual void accept_partial(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/) {}
++
+     // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
+     virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) const { return false; }
+     virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
+@@ -1524,8 +1566,22 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+     std::vector<int>                i_last;
+     std::vector<std::vector<float>> chain_h;
+ 
+-    common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
+-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
++    // Adaptive draft depth (draft-mtp-adaptive), see common_speculative_adaptive
++    bool adaptive = false;
++    std::vector<int> n_cap;   // [n_seq] effective draft cap for the current draft() call
++    std::vector<int> n_last;  // [n_seq] drafts attempted in the most recent draft() call; reset once fed back
++    std::vector<common_speculative_adaptive> adaptive_ctrl; // [n_seq] per-seq adaptive depth controller
++
++    // issue #234: align the drafting sequences' caps so one verify ubatch covers them all, and the
++    // MoE expert-cache verify band (`band`, 0 when no arena is active) that bounds how wide that ubatch
++    // may get before the cache stops serving the routed experts from VRAM.  `band` is set by the
++    // expert-cache integration once the arena's real state is known (`llama_model_moe_cache_band()`).
++    bool    align = true;
++    int32_t band  = 0;
++    std::vector<int> n_hard;  // [n_seq] the hard cap of this call: --spec-draft-n-max and the caller's n_max
++
++    common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq, bool adaptive = false, bool align = true)
++        : common_speculative_impl(adaptive ? COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE : COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
+         , params(params.draft)
+     {
+         auto * ctx_tgt = this->params.ctx_tgt;
+@@ -1537,6 +1593,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                 "MTP input row width must match the target h_nextn width");
+         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
+ 
++        this->adaptive = adaptive;
++        // n_cap/n_last are written by the shared draft loop in both modes
++        n_cap.assign(n_seq, 0);
++        n_hard.assign(n_seq, 0);
++        n_last.assign(n_seq, 0);
++
++        // issue #234: the verify-band bound of the aligned depth is read once by the MoE expert-cache
++        // integration, which is where `llama_model_moe_cache_band()` lives (0 = no arena = no bound)
++        this->align = align;
++
+         SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
+         SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
+         SPC_TRC("- gpu_layers=%d, cache_k=%s, cache_v=%s, ctx_tgt=%s, ctx_dft=%s, devices=[%s]\n",
+@@ -1588,6 +1654,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+         is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt && std::strcmp(arch, "gemma4-assistant") == 0;
+         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
+ 
++        // remember the user n_max: chain_heads caps it at the model MTP layer
++        // count, and the adaptive range abort below must explain the cap
++        const int32_t n_max_user = this->params.n_max;
+         if (chain_heads) {
+             this->params.n_max = std::min(this->params.n_max, n_mtp_layers);
+ 
+@@ -1598,6 +1667,34 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+         }
+         this->n_max = this->params.n_max;
+ 
++        if (adaptive) {
++            // a floor above the ceiling would pin the depth below the floor, so the
++            // configuration is invalid
++            if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {
++                if (n_max_user > this->params.n_max) {
++                    // n_max was capped by the MTP layer count, not by the user
++                    throw std::runtime_error(string_format(
++                            "invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_max is capped by the model MTP layer count %d; set --spec-draft-n-min-adaptive to at most %d)",
++                            this->params.n_min_adaptive, this->params.n_max, n_mtp_layers, n_mtp_layers));
++                }
++                throw std::runtime_error(string_format(
++                        "invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_min_adaptive must be in [1, n_max])",
++                        this->params.n_min_adaptive, this->params.n_max));
++            }
++
++            adaptive_ctrl.assign(n_seq, common_speculative_adaptive());
++            for (uint32_t s = 0; s < n_seq; ++s) {
++                // start at --spec-draft-n-start when set, otherwise the default cold
++                // start (cap - 3, bounded by the floor); the controller settles from
++                // there once acceptance feedback arrives
++                adaptive_ctrl[s].reset(this->params.n_max, this->params.n_min_adaptive, this->params.n_start);
++            }
++            if (this->params.n_min > 0) {
++                SPC_WRN("%s", "--spec-draft-n-min is not used in adaptive mode; use --spec-draft-n-min-adaptive for the floor\n");
++            }
++            SPC_TRC("%s", "adaptive draft depth enabled (draft-mtp-adaptive)\n");
++        }
++
+         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
+ 
+         i_last.assign(n_seq, -1);
+@@ -1626,6 +1723,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+         // reset here rather than per round, or two identical requests differ
+         common_sampler_reset(smpls[seq_id].get());
+ 
++        // new generation: the depth learned for the previous content is stale,
++        // so the controller starts over from --spec-draft-n-start (or the default
++        // cold start), even for an empty prompt
++        if (adaptive) {
++            adaptive_ctrl[seq_id].reset(this->params.n_max, this->params.n_min_adaptive, this->params.n_start);
++        }
++
+         const int32_t N = (int32_t) prompt.size();
+         if (N <= 0) {
+             return;
+@@ -1643,6 +1747,48 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+         }
+     }
+ 
++    // LLAMA_MTP_INGEST_TAIL=<tokens>: feed the draft only the last <tokens> positions of each prompt.  The draft
++    // attends over its own KV, so the skipped prefix only narrows what it can look back on when drafting; the target
++    // verifies every drafted token, so output is unchanged.  Generation positions are always fed.  0/unset: every row.
++    std::vector<llama_pos> ingest_from;
++    std::vector<llama_pos> ingest_prompt_end;   // prompt phase of each seq: -1 once its first generation row is seen
++
++    void set_prompt_end(llama_seq_id seq_id, llama_pos n_prompt) override {
++        static const int32_t tail = [] {
++            const char * e = getenv("LLAMA_MTP_INGEST_TAIL");
++            return e != nullptr ? atoi(e) : 0;
++        }();
++        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
++            return;
++        }
++        if (ingest_from.size() < (size_t) n_seq) {
++            ingest_from.assign(n_seq, 0);
++            ingest_prompt_end.assign(n_seq, -1);
++        }
++        ingest_from[seq_id]       = tail > 0 ? std::max<llama_pos>(0, n_prompt - tail) : 0;
++        ingest_prompt_end[seq_id] = n_prompt;
++        // the target's nextn rows below ingest_from - 1 are never read: neither ingested, nor (as a batch's last row,
++        // pending_h) the h(p - 1) of an ingested row p.  Kept equal to max(0, ingest_from - 1) at every reset below.
++        llama_set_embeddings_nextn_from(this->params.ctx_tgt, seq_id, ingest_from[seq_id] - 1);
++    }
++
++    // a prompt batch whose every row is below ingest_from - 1 (prompt phase): nothing to ingest, and its last row
++    // cannot be the h(p - 1) of an ingested row, so return before the getters synchronize the target.  Vision rows
++    // never qualify (M-RoPE: the text after an image resumes at a jumped position; same rule as the target side).
++    bool prompt_batch_unneeded(const common_batch & batch_in) const {
++        if (ingest_prompt_end.empty()) {
++            return false;
++        }
++        for (int k = 0; k < batch_in.size(); ++k) {
++            const auto & t = batch_in.tokens[k];
++            if (t.id == LLAMA_TOKEN_NULL || (size_t) t.seq_id >= ingest_prompt_end.size() ||
++                ingest_prompt_end[t.seq_id] < 0 || t.pos[0] >= ingest_from[t.seq_id] - 1) {
++                return false;
++            }
++        }
++        return true;
++    }
++
+     bool process(const common_batch & batch_in) override {
+         if (batch_in.size() <= 0) {
+             return true;
+@@ -1652,6 +1798,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+             return true;
+         }
+ 
++        // LLAMA_MTP_TAIL_READBACK=0 disables both halves of the prompt-tail readback skip: this early return (which is
++        // what stops llama_get_embeddings_nextn()'s ctx->synchronize() from draining both backends after every prompt
++        // ubatch) and the target's set_embeddings_nextn_from threshold.  That is the pre-r118 behaviour.
++        static const bool tail_readback_skip = [] {
++            const char * e = getenv("LLAMA_MTP_TAIL_READBACK");
++            return e == nullptr || atoi(e) != 0;
++        }();
++        if (tail_readback_skip && prompt_batch_unneeded(batch_in)) {
++            return true;
++        }
++
+         const int32_t n_tokens = batch_in.size();
+ 
+         // remember the first and last batch index for each sequence
+@@ -1691,6 +1848,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+ 
+                 const llama_seq_id seq_id = t.seq_id;
+ 
++                if ((size_t) seq_id < ingest_prompt_end.size() && ingest_prompt_end[seq_id] >= 0) {
++                    if (t.pos[0] >= ingest_prompt_end[seq_id]) {
++                        // generation reached: the prompt phase is over, so later position shifts never skip rows
++                        ingest_from[seq_id]       = 0;
++                        ingest_prompt_end[seq_id] = -1;
++                        llama_set_embeddings_nextn_from(ctx_tgt, seq_id, 0);
++                    } else if (t.pos[0] < ingest_from[seq_id]) {
++                        continue;   // LLAMA_MTP_INGEST_TAIL: a prompt row before the ingested tail
++                    }
++                }
++
+                 // vision tokens carry an embedding instead of an id
+                 const int32_t idx = t.id != LLAMA_TOKEN_NULL
+                     ? batch.add(t.id, t.pos[0], seq_id, false)
+@@ -1706,7 +1874,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+             auto * mem_dft = llama_get_memory(ctx_dft);
+ 
+             bool ok = true;
+-            for (int head = 0; head < n_mtp_layers; ++head) {
++            for (int head = 0; head < n_mtp_layers && batch.size() > 0; ++head) {
+                 if (chain_heads) {
+                     // ref: https://github.com/ggml-org/llama.cpp/pull/24340/changes#r3413498544
+                     for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+@@ -1740,12 +1908,27 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                 continue;
+             }
+ 
+-            const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
++            int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
++            int32_t i_row0 = i_batch_beg[seq_id];
++            // A prompt batch (still inside the prompt reported by set_prompt_end): accept() only ever follows a verify
++            // batch, whose own process() refills verify_h, so only the last row (the next pending_h) is needed (a
++            // 2048-row prompt ubatch copied ~84 MB here).  Verify batches, of any length, keep every row.  The prompt
++            // phase also ends here, so the shared-memory path (which skips the ingest loop above) ends it too.
++            const llama_pos pos_end  = batch_in.tokens[i_batch_end[seq_id]].pos[0];
++            const bool      have_end = (size_t) seq_id < ingest_prompt_end.size() && ingest_prompt_end[seq_id] >= 0;
++            if (have_end && pos_end >= ingest_prompt_end[seq_id]) {
++                ingest_from[seq_id]       = 0;   // generation reached
++                ingest_prompt_end[seq_id] = -1;
++                llama_set_embeddings_nextn_from(ctx_tgt, seq_id, 0);
++            } else if (n_rows > 1 && have_end) {
++                i_row0 += n_rows - 1;
++                n_rows  = 1;
++            }
+             verify_h_rows[seq_id] = n_rows;
+             verify_h[seq_id].resize((size_t) n_rows * n_embd);
+ 
+             for (int32_t i = 0; i < n_rows; ++i) {
+-                const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_batch_beg[seq_id] + i);
++                const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, i_row0 + i);
+                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
+             }
+ 
+@@ -1774,6 +1957,18 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+ 
+             n_drafting++;
+             drafting[seq_id] = true;
++
++            // effective draft cap for this step: adaptive depth (or the user n_max),
++            // then clamped by the per-call context bound from the server
++            n_cap[seq_id] = adaptive ? adaptive_ctrl[seq_id].n_cur : params.n_max;
++            n_hard[seq_id] = params.n_max;
++            if (dp.n_max > 0 && dp.n_max < n_cap[seq_id]) {
++                n_cap[seq_id] = dp.n_max;
++            }
++            if (dp.n_max > 0 && dp.n_max < n_hard[seq_id]) {
++                n_hard[seq_id] = dp.n_max;
++            }
++
+             // greedy drafting leaves no candidates behind, so the verifier falls back to sample-and-match
+             if (!params.probabilistic) {
+                 dp.result_q = nullptr;
+@@ -1799,6 +1994,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+             }
+         }
+ 
++        if (align && n_drafting > 1) {
++            align_draft_caps(drafting, n_drafting);
++        }
++
+         int i = 0;
+ 
+         while (n_drafting > 0) {
+@@ -1869,7 +2068,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                     dp.result_q->emplace_back(cur_p->data, cur_p->data + cur_p->size);
+                 }
+ 
+-                if (params.n_max <= (int) result.size()) {
++                if (n_cap[seq_id] <= (int) result.size()) {
+                     drafting[seq_id] = false;
+                     n_drafting--;
+                     continue;
+@@ -1916,17 +2115,103 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+                 continue;
+             }
+ 
+-            if (dp.result->size() < (size_t) params.n_min) {
++            n_last[seq_id] = (int) dp.result->size();
++
++            // the adaptive controller decides its own depth, so the generic n_min
++            // draft cutoff does not apply to it
++            if (!adaptive && dp.result->size() < (size_t) params.n_min) {
+                 dp.result->clear();
+             }
+         }
+     }
+ 
+-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
++    // issue #234: give every drafting sequence the same draft cap for this call, so all of them present the
++    // same number of rows to the verify batch (see spec_align_enabled() for the why and the numbers).
++    //
++    // The aligned width is
++    //   max over the drafting sequences of their cap        (raise a shallow sequence to the deepest one; the
++    //                                                        adaptive depth is worth more than a fixed one)
++    //   bounded by the smallest HARD cap in the call        (--spec-draft-n-max, the MTP layer cap and the
++    //                                                        caller's per-slot n_max, which the server lowers as a
++    //                                                        response runs out of tokens)
++    //   bounded by the expert cache's band                  (the band applies to the WHOLE verify batch, so
++    //                                                        n_drafting sequences may use band / n_drafting - 1
++    //                                                        rows each; see common_speculative_clamp_ngram_n_max)
++    // so no sequence is ever asked for more than it would draft when it runs alone.  Lowering a sequence to
++    // the smallest hard cap (the second bound) is deliberate and is the only case where the width shrinks: it
++    // is transient (a response nearing its end) and it keeps the pair in one ubatch.  This is the ONE place a
++    // verify width is equalized: it never touches another implementation's draft, which is why the generic
++    // "cut the drafts to the shortest" is not here (spec_align_enabled() records what it measured).
++    void align_draft_caps(const std::vector<bool> & drafting, int n_drafting) {
++        int n_align   = 0;
++        int n_hard_lo = 0;
++
++        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
++            if (!drafting[seq_id]) {
++                continue;
++            }
++
++            n_align   = std::max(n_align, n_cap[seq_id]);
++            n_hard_lo = n_hard_lo == 0 ? n_hard[seq_id] : std::min(n_hard_lo, n_hard[seq_id]);
++        }
++
++        if (n_hard_lo > 0) {
++            n_align = std::min(n_align, n_hard_lo);
++        }
++
++        if (band > 1) {
++            n_align = std::min(n_align, std::max(0, band / n_drafting - 1));
++        }
++
++        if (n_align <= 0) {
++            return;
++        }
++
++        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
++            if (drafting[seq_id] && n_cap[seq_id] != n_align) {
++                SPC_DBG("aligned draft depth seq %d: %d -> %d (band %d, drafting %d, hard %d)\n",
++                        (int) seq_id, n_cap[seq_id], n_align, band, n_drafting, n_hard_lo);
++                n_cap[seq_id] = n_align;
++            }
++        }
++    }
++
++    // feed one acceptance result to the adaptive controller; n_last[seq_id] is the
++    // draft length of this round and is reset so a replayed round is not counted.
++    // The bucketed controller compares the accepted count to the depth it holds,
++    // so a draft that came up short is a miss rather than a truncated accept.
++    void adaptive_feedback(llama_seq_id seq_id, uint16_t n_accepted) {
++        if (!adaptive || n_last[seq_id] <= 0) {
++            return;
++        }
++
++        const int depth_before = adaptive_ctrl[seq_id].n_cur;
++        adaptive_ctrl[seq_id].update(n_accepted, params.n_max, params.n_min_adaptive);
++        if (adaptive_ctrl[seq_id].n_cur != depth_before) {
++            // the depth transitions are the user-visible part of the adaptive
++            // behaviour -- they explain the decode throughput a run reports --
++            // so they are reported at TRC rather than DBG
++            SPC_TRC("adaptive draft depth seq %d: %d -> %d (n_draft=%d, n_accepted=%d, n_bucket=%d)\n",
++                    (int) seq_id, depth_before, adaptive_ctrl[seq_id].n_cur, n_last[seq_id], n_accepted,
++                    adaptive_ctrl[seq_id].n_bucket);
++        }
++
++        n_last[seq_id] = 0;
++    }
++
++    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
+         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+             return;
+         }
+ 
++        // update the adaptive controller only when this implementation produced the
++        // accepted draft; on is_other the stats belong to a different speculator.
++        // a replay round (cached draft restored from a checkpoint) has n_last == 0
++        // and is skipped here
++        if (!is_other) {
++            adaptive_feedback(seq_id, n_accepted);
++        }
++
+         const int32_t n_rows = verify_h_rows[seq_id];
+         if (n_rows <= 0) {
+             return;
+@@ -1936,6 +2221,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+         const size_t row_bytes = (size_t) n_embd * sizeof(float);
+         std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
+     }
++
++    // partial acceptance on a context that cannot roll back: the rejected draft
++    // suffix is checkpoint-restored and replayed next round, so the acceptance
++    // feedback is delivered here instead of in accept()
++    void accept_partial(llama_seq_id seq_id, uint16_t n_accepted) override {
++        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
++            return;
++        }
++
++        adaptive_feedback(seq_id, n_accepted);
++    }
+ };
+ 
+ // state of self-speculation (simple implementation, not ngram-map)
+@@ -2422,6 +2718,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
+         case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:  return "draft-simple";
+         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
+         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
++        case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE: return "draft-mtp-adaptive";
+         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
+         case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:  return "draft-dspark";
+         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
+@@ -2513,6 +2810,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
+             case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
++            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
+             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
+                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
+@@ -2668,8 +2966,16 @@ common_params common_base_params_to_speculative(const common_params & params) {
+         }
+     }
+ 
+-    result.cache_type_k  = params_spec.cache_type_k;
+-    result.cache_type_v  = params_spec.cache_type_v;
++    // r125 (issue #216): the draft context follows the main KV cache type unless the draft's own type
++    // was set explicitly (-ctkd / -ctvd / their env vars).  Upstream defaults the draft to f16 whatever
++    // -ctk / -ctv says, which is invisible and costs VRAM: on a dense 27B MTP run (-c 131072) the draft
++    // context's single attention layer held 512 MiB of f16 KV against 144 MiB at q4_0, i.e. 368 MiB that
++    // a 16 GiB card cannot spare.  It costs ~2 % decode (the draft's own attention over a quantized
++    // cache) and NOTHING in the output: the draft only proposes, the target verifies, and the greedy
++    // text is byte-identical across the two draft KV types.  So the cheap type follows the main one by
++    // default and an explicit -ctkd / -ctvd still pins whatever the user asked for.
++    result.cache_type_k  = params_spec.cache_type_k_set ? params_spec.cache_type_k : params.cache_type_k;
++    result.cache_type_v  = params_spec.cache_type_v_set ? params_spec.cache_type_v : params.cache_type_v;
+     result.n_outputs_max = params.n_parallel;
+     result.n_outputs_max_per_seq = 1;
+ 
+@@ -2715,15 +3021,24 @@ common_speculative_init_result::common_speculative_init_result(
+     llama_context * ctx_tgt) :
+     pimpl(new impl{}) {
+     const bool has_draft = params.speculative.has_dft();
+-    const bool spec_mtp = std::find(params.speculative.types.begin(),
+-                                    params.speculative.types.end(),
+-                                    COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
++    const bool spec_mtp = params.speculative.has_mtp();
+ 
+     auto mparams = common_model_params_to_llama(params);
+     auto cparams = common_context_params_to_llama(params);
+ 
+     if (spec_mtp) {
+         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
++
++        // LLAMA_MTP_DRAFT_OP_OFFLOAD=0: keep the draft context's host-resident ops (e.g. the MTP
++        // layer's experts under -otd exps=CPU) on the host instead of offloading them to the device
++        // for prefill-sized batches.  With the expert cache armed (MOE_EXPERT_CACHE_MIB) the offload
++        // stages full-size copies of those weights in the draft context's compute buffer; disabling
++        // it frees them (measured 610 MiB on a qwen4exp shared Q8_0 head, no throughput cost).
++        // Opt-in: unset keeps the previous behaviour.  See wip/mtp-draft-op-offload/.
++        const char * env = getenv("LLAMA_MTP_DRAFT_OP_OFFLOAD");
++        if (env != nullptr && atoi(env) == 0) {
++            cparams.op_offload = false;
++        }
+     }
+ 
+     // the draft context holds as many tokens per sequence as the target context
+@@ -2809,7 +3124,14 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+         };
+ 
+         // when adding a new type - update here the logic above
+-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
++        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 12);
++
++        // two MTP implementations would share one ctx_dft and each run process() on
++        // every batch, so the pair is rejected
++        if (std::find(params.types.begin(), params.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.types.end() &&
++            std::find(params.types.begin(), params.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) != params.types.end()) {
++            throw std::invalid_argument("draft-mtp and draft-mtp-adaptive cannot be enabled together");
++        }
+ 
+         // this list here defines the priority of the speculators
+         // the one with highest priority are listed first
+@@ -2822,12 +3144,16 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
+         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params.draft.ctx_dft != nullptr);
+         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP,    params.draft.ctx_dft != nullptr);
++        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE, params.draft.ctx_dft != nullptr);
+         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params.draft.ctx_dft != nullptr);
+         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params.draft.ctx_dft != nullptr);
+     }
+ 
+     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
+ 
++    // issue #234: read once, handed to the implementations that choose a per-sequence draft length
++    const bool align = spec_align_enabled();
++
+     for (const common_speculative_config & config : configs) {
+         switch (config.type) {
+             case COMMON_SPECULATIVE_TYPE_NONE:
+@@ -2841,7 +3167,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
+                 break;
+             }
+             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
+-                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq));
++                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq, /*adaptive=*/ false, align));
++                break;
++            }
++            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE: {
++                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq, /*adaptive=*/ true, align));
+                 break;
+             }
+             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH: {
+@@ -2966,6 +3296,15 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
+     }
+ }
+ 
++void common_speculative_set_prompt_end(common_speculative * spec, llama_seq_id seq_id, llama_pos n_prompt) {
++    if (spec == nullptr) {
++        return;
++    }
++    for (auto & impl : spec->impls) {
++        impl->set_prompt_end(seq_id, n_prompt);
++    }
++}
++
+ bool common_speculative_process(common_speculative * spec, const common_batch & batch) {
+     bool result = true;
+ 
+@@ -3106,6 +3445,17 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
+     }
+ }
+ 
++void common_speculative_accept_partial(common_speculative * spec, llama_seq_id seq_id, uint16_t n_accepted) {
++    common_speculative_impl * impl = spec->impl_last[seq_id];
++
++    if (impl == nullptr) {
++        GGML_ASSERT(n_accepted == 0);
++        return;
++    }
++
++    impl->accept_partial(seq_id, n_accepted);
++}
++
+ // TODO: support the case of more than one speculative implementations having a state
+ bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data) {
+     if (spec == nullptr) {
+diff --git a/common/speculative.h b/common/speculative.h
+index 4262327cb..605a847b0 100644
+--- a/common/speculative.h
++++ b/common/speculative.h
+@@ -89,12 +89,21 @@ void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, co
+ // process the batch and update the internal state of the speculative context
+ bool common_speculative_process(common_speculative * spec, const common_batch & batch);
+ 
++// the prompt of `seq_id` about to be processed ends at position `n_prompt` (exclusive); lets the MTP draft limit its
++// prompt ingestion (LLAMA_MTP_INGEST_TAIL)
++void common_speculative_set_prompt_end(common_speculative * spec, llama_seq_id seq_id, llama_pos n_prompt);
++
+ // generate drafts for the sequences specified with `common_speculative_get_draft_params`
+ void common_speculative_draft(common_speculative * spec);
+ 
+ // informs the speculative context that n_accepted tokens were accepted by the target model
+ void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
+ 
++// report a partial acceptance that the context could not apply (checkpoint-restore
++// path); the full accept() will not be called for this round, so implementations
++// with cross-round state (e.g. the adaptive depth controller) get the feedback here
++void common_speculative_accept_partial(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
++
+ // (optional) get/set internal state
+ bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data);
+ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data);
+diff --git a/docs/speculative.md b/docs/speculative.md
+index a32842a25..543ec3d84 100644
+--- a/docs/speculative.md
++++ b/docs/speculative.md
+@@ -224,7 +224,7 @@ Use exactly one of these options:
+ ### General Speculative Parameters
+ 
+ ```
+---spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
++--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|draft-mtp-adaptive|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+                                         comma-separated list of types of speculative decoding to use
+                                         (default: none)
+                                         (env: LLAMA_ARG_SPEC_TYPE)
+@@ -250,6 +250,12 @@ Use exactly one of these options:
+ --spec-draft-n-ubatch                   N
+                                         physical maximum batch size of the draft context, use a smaller value to spare VRAM (default: 0 - same as --n-ubatch)
+                                         (env: LLAMA_ARG_SPEC_DRAFT_N_UBATCH)
++--spec-draft-n-min-adaptive                     N
++                                        minimum adaptive MTP draft depth; the depth never drops below it (the default cold start is three steps below --spec-draft-n-max, bounded by this floor) (default: 3)
++                                        (env: LLAMA_ARG_SPEC_DRAFT_N_MIN_ADAPTIVE)
++--spec-draft-n-start                    N
++                                        initial adaptive MTP draft depth: the first verify round of each generation starts here instead of the default cold start.  Clamped to [--spec-draft-n-min-adaptive, --spec-draft-n-max].  Use it to start deeper when the workload settles high (e.g. verbatim recall) or shallower for a short generation at a deep context, where a wide verify batch costs more.  Unset: three steps below the ceiling, bounded by the floor.
++                                        (env: LLAMA_ARG_SPEC_DRAFT_N_START)
+ --spec-draft-p-split, --draft-p-split   P
+                                         speculative decoding split probability (default: 0.10)
+                                         (env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)
+@@ -370,6 +376,7 @@ Specifies a comma-separated list of speculative decoding types to use.
+ | `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step |
+ | `draft-dspark` | Use a DSpark draft model (DFlash backbone + semi-autoregressive Markov head) |
+ | `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
++| `draft-mtp-adaptive` | Use MTP heads from the main model with an adaptive draft depth that tracks the current acceptance rate |
+ | `ngram-cache` | Use n-gram cache lookup |
+ | `ngram-simple` | Use simple n-gram pattern matching |
+ | `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |
+diff --git a/examples/speculative-simple/speculative-simple.cpp b/examples/speculative-simple/speculative-simple.cpp
+index e4a878b82..cb627129b 100644
+--- a/examples/speculative-simple/speculative-simple.cpp
++++ b/examples/speculative-simple/speculative-simple.cpp
+@@ -266,6 +266,10 @@ int main(int argc, char ** argv) {
+         if (use_ckpt_tgt && ids.size() - 1 < n_draft) {
+             LOG_DBG("partial acceptance: %zu < %zu, restoring checkpoint\n", ids.size() - 1, n_draft);
+ 
++            // the accepted tokens are replayed next round without a new draft() call;
++            // report the partial result now so speculators do not get stale feedback
++            common_speculative_accept_partial(spec, seq_id, ids.size() - 1);
++
+             draft = std::move(ids);
+ 
+             {
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index f7f46083a..ca3386ca1 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -168,7 +168,7 @@ static bool ggml_cuda_register_host_enabled() {
+     return enabled;
+ }
+ 
+-static bool ggml_cuda_fusion_disabled() {
++bool ggml_cuda_fusion_disabled() {
+     static const bool disabled = ggml_cuda_env_flag("GGML_CUDA_DISABLE_FUSION");
+     return disabled;
+ }
+diff --git a/include/llama.h b/include/llama.h
+index 052ce4533..c897c09e4 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -369,6 +369,7 @@ extern "C" {
+         uint32_t n_ubatch;              // physical maximum batch size
+         uint32_t n_seq_max;             // max number of sequences (i.e. distinct states for recurrent models)
+         uint32_t n_rs_seq;              // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
++        uint32_t n_rs_batch;            // largest per-seq batch that can be rolled back into (0 = n_rs_seq + 1) [EXPERIMENTAL]
+         uint32_t n_outputs_max;         // max outputs in a ubatch (0 = n_batch)
+         uint32_t n_outputs_max_per_seq; // max outputs per sequence (0 = n_outputs_max)
+         int32_t  n_threads;             // number of threads to use for generation
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 5efedf27e..44e8fda47 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1360,6 +1360,12 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
+     cparams.embeddings_nextn_masked = masked;
+ }
+ 
++void llama_context::set_embeddings_nextn_from(llama_seq_id seq_id, llama_pos pos) {
++    if (seq_id >= 0 && seq_id < LLAMA_MAX_SEQ) {
++        embd_nextn_from[seq_id] = std::max<llama_pos>(0, pos);
++    }
++}
++
+ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
+     LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
+ 
+@@ -1995,6 +2001,15 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+     int64_t n_outputs_prev = 0;
+     int64_t n_tokens_prev_l  = 0;
+ 
++    // LLAMA_MTP_TAIL_READBACK=0: disable the prompt-tail readback skip on both halves (this ubatch's nextn copy and
++    // the MTP hook's early return, which is what stops llama_get_embeddings_nextn() from draining the backends).  That
++    // is the pre-r118 behaviour with LLAMA_MTP_INGEST_TAIL still set.  Bisect/debug kill-switch; the skip is on by
++    // default, and without LLAMA_MTP_INGEST_TAIL no row's threshold is above 0, so it cannot trigger.
++    static const bool nextn_readback_skip = [] {
++        const char * e = getenv("LLAMA_MTP_TAIL_READBACK");
++        return e == nullptr || atoi(e) != 0;
++    }();
++
+     // complete the async device->host readbacks issued for one ubatch
+     auto sync_readback = [&](ggml_tensor * t) {
+         if (t == nullptr) {
+@@ -2150,6 +2165,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+ 
+         // [TAG_EXTRACT_TARGET_EMBEDDINGS]
+         bool extract_all_idxs = extract_layer_inputs(res, n_tokens_prev_l, ubatch.n_tokens);
++        const bool layer_inp_read = extract_all_idxs;
++        bool nextn_read = false;
+ 
+         // extract nextn embeddings before
+         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
+@@ -2157,8 +2174,34 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+             const bool masked    = cparams.embeddings_nextn_masked;
+             const int64_t n_rows = masked ? n_outputs       : (int64_t) ubatch.n_tokens;
+             const int64_t offset = masked ? n_outputs_prev  : n_tokens_prev_l;
++            const bool nextn_rows = embd_nextn.data && t_h_nextn && n_rows > 0 &&
++                                    cparams.pooling_type == LLAMA_POOLING_TYPE_NONE;
++
++            // set_embeddings_nextn_from: an unmasked ubatch whose every row is below its sequence's threshold is not
++            // read back (its host rows stay stale).  Embedding (vision) rows are always read: under M-RoPE the text
++            // after an image resumes at a jumped section-0 position, so the last image row can be the h(p - 1) of an
++            // ingested row although its own position is below the threshold.  The scan runs only when the nextn rows
++            // are extracted at all, so a decode without them (every non-MTP run) is untouched.
++            bool nextn_unneeded = false;
++            if (nextn_rows && !masked && nextn_readback_skip) {
++                nextn_unneeded = true;
++                for (uint32_t i = 0; i < ubatch.n_tokens && nextn_unneeded; ++i) {
++                    if (ubatch.type ? ubatch.type[i] != 0 : ubatch.token == nullptr) {
++                        nextn_unneeded = false;
++                        break;
++                    }
++                    for (int32_t j = 0; j < ubatch.n_seq_id[i] && nextn_unneeded; ++j) {
++                        const llama_seq_id s = ubatch.seq_id[i][j];
++                        nextn_unneeded = s >= 0 && s < LLAMA_MAX_SEQ && ubatch.pos[i] < embd_nextn_from[s];
++                    }
++                }
++            }
+ 
+-            if (embd_nextn.data && t_h_nextn && n_rows > 0 && cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
++            if (nextn_rows && nextn_unneeded) {
++                // the host row bookkeeping below is kept: embd_batch_idxs must stay aligned with the dense unmasked
++                // host rows, or output_reorder()'s nextn permutation would place a later ubatch's rows wrongly
++                extract_all_idxs = true;
++            } else if (nextn_rows) {
+                 ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_nextn);
+                 GGML_ASSERT(backend_h != nullptr);
+ 
+@@ -2167,6 +2210,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+ 
+                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
+                 ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
++                nextn_read = true;
+                 extract_all_idxs = extract_all_idxs || !masked;
+             }
+         }
+@@ -2208,7 +2252,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+         // upload waits only for this graph's compute, not for the copies queued after it, and was observed (Windows, ROCm)
+         // to overwrite a layer input before its copy had read it.
+         static const bool readback_sync = getenv("GGML_READBACK_SYNC") == nullptr || atoi(getenv("GGML_READBACK_SYNC")) != 0;
+-        if (readback_sync && (n_outputs > 0 || extract_all_idxs)) {
++        if (readback_sync && (n_outputs > 0 || layer_inp_read || nextn_read)) {
+             sync_readback(t_logits);
+             sync_readback(t_embd);
+             sync_readback(t_h_nextn);
+@@ -4043,6 +4087,7 @@ llama_context_params llama_context_default_params() {
+         /*.n_ubatch                    =*/ 512,
+         /*.n_seq_max                   =*/ 1,
+         /*.n_rs_seq                    =*/ 0,
++        /*.n_rs_batch                  =*/ 0,
+         /*.n_outputs_max               =*/ 0,
+         /*.n_outputs_max_per_seq       =*/ 1,
+         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
+@@ -4316,6 +4361,10 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
+     return ctx->get_embeddings_seq(seq_id);
+ }
+ 
++void llama_set_embeddings_nextn_from(llama_context * ctx, llama_seq_id seq_id, llama_pos pos) {
++    ctx->set_embeddings_nextn_from(seq_id, pos);
++}
++
+ void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
+     ctx->set_embeddings_nextn(value, masked);
+ }
+diff --git a/src/llama-context.h b/src/llama-context.h
+index 6938fb103..c7a121857 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -119,6 +119,7 @@ struct llama_context {
+ 
+     void set_embeddings (bool value);
+     void set_embeddings_nextn(bool value, bool masked);
++    void set_embeddings_nextn_from(llama_seq_id seq_id, llama_pos pos);
+     void set_embeddings_layer_inp(uint32_t lid, bool enable);
+     void set_nextn_layer_offset(int32_t offset);
+     void set_causal_attn(bool value);
+@@ -320,6 +321,7 @@ private:
+     // populated only when cparams.embeddings_nextn is enabled and the model graph
+     // sets llm_graph_result::t_h_nextn
+     buffer_view<float> embd_nextn = {nullptr, 0};
++    llama_pos          embd_nextn_from[LLAMA_MAX_SEQ] = {};   // set_embeddings_nextn_from: rows below are not read back
+ 
+     // host buffers for output layer input embeddings, per layer
+     // populated when cparams.output_layer_inp[il] is true
+diff --git a/src/llama-cparams.h b/src/llama-cparams.h
+index 0c260f7b6..e36b78ac8 100644
+--- a/src/llama-cparams.h
++++ b/src/llama-cparams.h
+@@ -14,6 +14,7 @@ struct llama_cparams {
+     uint32_t n_ubatch;
+     uint32_t n_seq_max;
+     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
++    uint32_t n_rs_batch;      // largest per-seq batch that can be rolled back into (0 = n_rs_seq + 1)
+     uint32_t n_outputs_max;   // max outputs supported by the context
+     uint32_t n_outputs_max_per_seq;
+     int32_t  n_threads;       // number of threads to use for generation
+diff --git a/src/llama-ext.h b/src/llama-ext.h
+index 933cb8013..5d244ecac 100644
+--- a/src/llama-ext.h
++++ b/src/llama-ext.h
+@@ -103,6 +103,12 @@ LLAMA_API void llama_model_set_attn_rot(struct llama_model * model, bool value);
+ // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
+ LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);
+ 
++// Unmasked nextn rows of `seq_id` at positions < `pos` are not needed by the caller: a ubatch whose every row is
++// such a row skips the device->host copy of the nextn embeddings (and the readback wait).  Those host rows then hold
++// stale data.  0 (the default) = every row is needed.  Used by the MTP prompt-tail ingest (LLAMA_MTP_INGEST_TAIL);
++// the skip it enables is a bisect kill-switch away (LLAMA_MTP_TAIL_READBACK=0 reads every row again).
++LLAMA_API void llama_set_embeddings_nextn_from(struct llama_context * ctx, llama_seq_id seq_id, llama_pos pos);
++
+ // Select which appended NextN block the DECODER_MTP graph runs (offset past
+ // the trunk: il = n_layer() + offset). Used by the speculative NextN driver to
+ // chain multiple trained NextN heads. Default 0 (first head).
+@@ -152,6 +158,12 @@ LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_mode
+ // returns the number of extracted layers from target model
+ LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
+ 
++// layers whose input embeddings contexts created from this model extract from the start (as if
++// llama_set_embeddings_layer_inp(ctx, lid, true) had been called before the context's first graph reserve).
++// For a target whose draft will turn the extraction on (DFlash): the compute buffers are then sized for it once,
++// instead of being freed and allocated again, larger, at the first decode after the draft attaches.
++LLAMA_API void llama_model_set_embeddings_layer_inp_preset(struct llama_model * model, const int32_t * lids, uint32_t n);
++
+ // retrieves the whole token embedding matrix in F32 format (n_embd * n_vocab)
+ // returns total number of elements or 0 on error
+ // if out is nullptr, returns the number of tokens without writing to out
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 34fbfb94d..72ef5a359 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -3984,6 +3984,14 @@ static void llama_tensor_rows_to_f32(const ggml_tensor * tensor, int64_t row0, i
+     }
+ }
+ 
++void llama_model_set_embeddings_layer_inp_preset(struct llama_model * model, const int32_t * lids, uint32_t n) {
++    if (n == 0) {
++        model->embeddings_layer_inp_preset.clear();
++    } else {
++        model->embeddings_layer_inp_preset.assign(lids, lids + n);
++    }
++}
++
+ uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out) {
+     if (model->vocab.n_tokens() == 0 || model->tok_embd == nullptr) {
+         return 0;
+diff --git a/src/llama-model.h b/src/llama-model.h
+index 01fbda319..72188ce47 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -836,6 +836,9 @@ struct llama_model {
+     // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.
+     std::vector<int32_t> target_layer_ids;
+ 
++    // layers whose input embeddings new contexts extract from the start (llama_model_set_embeddings_layer_inp_preset)
++    std::vector<int32_t> embeddings_layer_inp_preset;
++
+     std::vector<llama_layer> layers;
+ 
+     //Dense linear projections for SentenceTransformers models like embeddinggemma
+diff --git a/src/models/delta-net-base.cpp b/src/models/delta-net-base.cpp
+index 2e15777ee..f4da85bf0 100644
+--- a/src/models/delta-net-base.cpp
++++ b/src/models/delta-net-base.cpp
+@@ -498,7 +498,16 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
+ 
+         const int64_t K = (int64_t) cparams.n_rs_seq + 1;
+ 
+-        for (int64_t t = 1; t <= K; ++t) {
++        // only the snapshot slots reachable by a rollback inside this batch are
++        // useful: rollback <= n_seq_tokens - 1, so slots beyond the batch repeat
++        // the pre-batch state and would only waste kernel launches per round
++        // the bound is safe because the only callers that roll back remove tokens
++        // this batch decoded: speculative verify batches start with the seq's last
++        // committed token. the fused GDN op relies on the same bound - it writes
++        // only the last min(n_seq_tokens, K) snapshots
++        const int64_t t_min = std::max<int64_t>(1, K - ubatch.n_seq_tokens + 1);
++
++        for (int64_t t = t_min; t <= K; ++t) {
+             const int64_t s_idx  = std::max<int64_t>(0, conv_input->ne[0] - conv_states->ne[0] - K + t);
+             const int64_t s_slot = K - t;
+ 
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 36703127a..87121524f 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -178,6 +178,7 @@ set(LLAMA_CONTEXT_TEST_SRC
+     llama-context/test-util.cpp
+ )
+ llama_build(${LLAMA_CONTEXT_TEST_SRC})
++llama_build(test-recurrent-state-depth.cpp)
+ 
+ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+@@ -272,6 +273,27 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+         ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1"
+     )
+ 
++    # snapshots for the speculative verify band: n_rs_seq 1..15 through the
++    # full rollback range, compared against a sequential reference
++    llama_test(
++        test-recurrent-state-depth
++        LABEL main
++        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"
++    )
++    set_tests_properties(test-recurrent-state-depth PROPERTIES
++        FIXTURES_REQUIRED generate-models
++    )
++
++    llama_test(
++        test-recurrent-state-depth
++        NAME test-recurrent-state-depth-qwen4exp
++        LABEL main
++        ARGS -m "${MODEL_DIR}/qwen4exp-moe.gguf"
++    )
++    set_tests_properties(test-recurrent-state-depth-qwen4exp PROPERTIES
++        FIXTURES_REQUIRED generate-models
++    )
++
+     llama_build(test-fusion.cpp)
+ endif()
+ 
+@@ -321,6 +343,7 @@ llama_build_and_test(test-thread-safety.cpp  LABEL "main backend"  ARGS -m "${MO
+ set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
+ 
+ llama_build_and_test(test-arg-parser.cpp  LABEL behavior)
++llama_build_and_test(test-speculative-adaptive.cpp)
+ llama_build_and_test(test-model-resolution.cpp  LABEL behavior)
+ # the test serves its repos from an httplib server, and the library links it privately
+ target_link_libraries(test-model-resolution PRIVATE cpp-httplib)
+diff --git a/tests/test-arg-parser.cpp b/tests/test-arg-parser.cpp
+index 543da2aed..2414b7509 100644
+--- a/tests/test-arg-parser.cpp
++++ b/tests/test-arg-parser.cpp
+@@ -284,6 +284,23 @@ static void test(void) {
+         assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+     }
+ 
++    // the adaptive floor defaults to 3 and parses explicitly; values below 1 are rejected
++    argv = {"binary_name", "-m", "model_file.gguf"};
++    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
++    assert(params.speculative.draft.n_min_adaptive == 3);
++    argv = {"binary_name", "-m", "model_file.gguf", "--spec-draft-n-min-adaptive", "5"};
++    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
++    assert(params.speculative.draft.n_min_adaptive == 5);
++    argv = {"binary_name", "-m", "model_file.gguf", "--spec-draft-n-min-adaptive", "0"};
++    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
++
++    // the adaptive MTP type parses to the dedicated enum value
++    argv = {"binary_name", "-m", "model_file.gguf", "--spec-type", "draft-mtp-adaptive"};
++    common_params spec_params;
++    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SPECULATIVE));
++    assert(std::find(spec_params.speculative.types.begin(), spec_params.speculative.types.end(),
++                     COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) != spec_params.speculative.types.end());
++
+     argv = {"binary_name", "-lm", "none"};
+     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+     assert(params.load_mode == LLAMA_LOAD_MODE_NONE);
+diff --git a/tests/test-recurrent-state-depth.cpp b/tests/test-recurrent-state-depth.cpp
+new file mode 100644
+index 000000000..c35181180
+--- /dev/null
++++ b/tests/test-recurrent-state-depth.cpp
+@@ -0,0 +1,215 @@
++// Deterministic sweep of the recurrent rollback snapshot machinery for the
++// speculative verify band.  For every (n_rs_seq, batch shape, rollback) it:
++//   ctx_roll: decode the full batch, partial-rollback r tokens through the
++//             snapshot path, then replay the removed tokens one at a time;
++//   ctx_ref : decode only the accepted prefix and then the same replay tokens.
++// A correct snapshot restore makes the replayed logits match bit-for-bit
++// (eps allows backend scheduling noise).
++//
++// This is the Phase 0 gate for the issue-#30 clamp policy: it must be green for
++// every allowed depth (n_rs_seq up to 15) before purity above 7 can be traded.
++
++#include "arg.h"
++#include "common.h"
++#include "ggml-backend.h"
++#include "llama.h"
++
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <limits>
++#include <vector>
++
++static llama_context * make_ctx(
++        const common_params & params, llama_model * model,
++        uint32_t n_rs_seq, uint32_t n_rs_batch, uint32_t n_ubatch,
++        uint32_t n_seq_max, uint32_t n_ctx) {
++    auto cparams = common_context_params_to_llama(params);
++    cparams.n_seq_max  = n_seq_max;
++    cparams.n_rs_seq   = n_rs_seq;
++    cparams.n_rs_batch = n_rs_batch;
++    cparams.n_ctx      = n_ctx;
++    cparams.n_batch    = n_ctx;
++    cparams.n_ubatch   = n_ubatch;
++    cparams.kv_unified = false;
++    return llama_init_from_model(model, cparams);
++}
++
++static bool decode_batch(llama_context * ctx, const std::vector<llama_token> & toks,
++                         llama_pos pos0, uint32_t n, llama_seq_id seq, bool last_logits) {
++    common_batch batch(ctx);
++    for (uint32_t i = 0; i < n; ++i) {
++        batch.add(toks[pos0 + i], pos0 + i, seq, last_logits && i + 1 == n);
++    }
++    return llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
++}
++
++static bool decode_one(llama_context * ctx, llama_token tok, llama_pos pos, llama_seq_id seq) {
++    common_batch batch(ctx);
++    batch.add(tok, pos, seq, true);
++    return llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
++}
++
++static std::vector<llama_token> make_tokens(
++        llama_context * ctx, const llama_vocab * vocab, uint32_t n_tokens, uint32_t n_vocab) {
++    std::vector<llama_token> toks;
++    if (llama_vocab_type(vocab) == LLAMA_VOCAB_TYPE_NONE) {
++        for (uint32_t i = 0; i < n_tokens; ++i) {
++            toks.push_back((llama_token) ((7*i + 3) % n_vocab));
++        }
++    } else {
++        auto toks0 = common_tokenize(ctx, "The quick brown fox jumps over the lazy dog", true);
++        if (toks0.empty()) {
++            toks0 = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
++        }
++        for (uint32_t i = 0; i < n_tokens; ++i) {
++            toks.push_back(toks0[i % toks0.size()] + (llama_token) ((i / toks0.size()) % 3));
++        }
++    }
++    return toks;
++}
++
++// returns max logit diff, or -1 on hard error
++static double run_case(
++        const common_params & params, llama_model * model, llama_context * ctx_tok,
++        const llama_vocab * vocab,
++        uint32_t n_rs_seq, uint32_t n_rs_batch, uint32_t n_ubatch,
++        uint32_t n_tokens, uint32_t n_rollback, bool verbose) {
++    const int n_vocab = llama_vocab_n_tokens(vocab);
++
++    std::vector<llama_token> toks = make_tokens(ctx_tok, vocab, n_tokens, (uint32_t) n_vocab);
++
++    llama_context * ctx_roll = make_ctx(params, model, n_rs_seq, n_rs_batch, n_ubatch, 1, 512);
++    llama_context * ctx_ref  = make_ctx(params, model, n_rs_seq, n_rs_batch, n_ubatch, 1, 512);
++    if (ctx_roll == nullptr || ctx_ref == nullptr) {
++        fprintf(stderr, "  [%s] failed to init contexts\n", __func__);
++        if (ctx_roll) llama_free(ctx_roll);
++        if (ctx_ref)  llama_free(ctx_ref);
++        return -1;
++    }
++
++    const uint32_t p0 = n_tokens - n_rollback;
++
++    bool ok = true;
++    ok = ok && decode_batch(ctx_roll, toks, 0, n_tokens, 0, true);
++    ok = ok && decode_batch(ctx_ref,  toks, 0, p0,      0, true);
++    if (!ok) {
++        fprintf(stderr, "  [prefill] decode failed\n");
++        llama_free(ctx_roll); llama_free(ctx_ref);
++        return -1;
++    }
++
++    const bool rm = llama_memory_seq_rm(llama_get_memory(ctx_roll), 0, (llama_pos) p0, -1);
++    if (!rm) {
++        fprintf(stderr, "  [rollback] seq_rm refused (n_tokens=%u rollback=%u)\n", n_tokens, n_rollback);
++        llama_free(ctx_roll); llama_free(ctx_ref);
++        return -1;
++    }
++
++    double diff_max = 0.0;
++    for (uint32_t i = p0; i < n_tokens; ++i) {
++        if (!decode_one(ctx_roll, toks[i], (llama_pos) i, 0) ||
++            !decode_one(ctx_ref,  toks[i], (llama_pos) i, 0)) {
++            fprintf(stderr, "  [replay] decode failed at pos %u\n", i);
++            llama_free(ctx_roll); llama_free(ctx_ref);
++            return -1;
++        }
++        const float * l_roll = llama_get_logits_ith(ctx_roll, 0);
++        const float * l_ref  = llama_get_logits_ith(ctx_ref,  0);
++        if (l_roll == nullptr || l_ref == nullptr) {
++            fprintf(stderr, "  [replay] missing logits at pos %u\n", i);
++            llama_free(ctx_roll); llama_free(ctx_ref);
++            return -1;
++        }
++        for (int t = 0; t < n_vocab; ++t) {
++            const double d = std::fabs((double) l_roll[t] - (double) l_ref[t]);
++            if (d > diff_max) diff_max = d;
++        }
++    }
++
++    if (verbose) {
++        fprintf(stderr, "  n_rs_seq=%2u n_rs_batch=%2u n_ub=%4u n_tokens=%3u rollback=%2u -> max diff %g\n",
++                n_rs_seq, n_rs_batch, n_ubatch, n_tokens, n_rollback, diff_max);
++    }
++
++    llama_free(ctx_roll);
++    llama_free(ctx_ref);
++    return diff_max;
++}
++
++int main(int argc, char ** argv) {
++    std::setlocale(LC_NUMERIC, "C");
++
++    common_params params;
++    params.sampling.seed = 1234;
++    params.n_predict     = 1;
++
++    common_init();
++    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
++        return 1;
++    }
++    ggml_backend_load_all();
++
++    common_init_result_ptr llama_init = common_init_from_params(params);
++    llama_model * model = llama_init->model();
++    if (model == nullptr) {
++        fprintf(stderr, "failed to init model\n");
++        return 1;
++    }
++    if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
++        fprintf(stderr, "skipping for non-recurrent model\n");
++        return 0;
++    }
++
++    const llama_vocab * vocab = llama_model_get_vocab(model);
++
++    constexpr double eps = 1e-5;
++    int n_fail = 0;
++
++    // Phase A: verify-batch shape.  n_tokens = K = n_rs_seq + 1, rollback the
++    // whole allowed range.  This is exactly the speculative verify + partial
++    // accept path for depth n_max = n_rs_seq.
++    fprintf(stderr, "=== Phase A: verify-batch shape (n_tokens = n_rs_seq+1) ===\n");
++    for (uint32_t n_rs_seq = 1; n_rs_seq <= 15; ++n_rs_seq) {
++        const uint32_t n_rs_batch = n_rs_seq + 1;
++        const uint32_t n_tokens   = n_rs_seq + 1;
++        int fail_a = 0;
++        for (uint32_t r = 1; r <= n_rs_seq; ++r) {
++            const double d = run_case(params, model, llama_init->context(), vocab, n_rs_seq, n_rs_batch, 32, n_tokens, r, false);
++            if (d < 0 || d > eps) {
++                fprintf(stderr, "FAIL A: n_rs_seq=%u rollback=%u max diff=%g\n", n_rs_seq, r, d);
++                ++fail_a;
++            }
++        }
++        n_fail += fail_a;
++        fprintf(stderr, "  n_rs_seq=%2u verify shape: %s\n", n_rs_seq, fail_a ? "FAIL" : "PASS");
++    }
++
++    // Phase B: deeper-than-K batch still at/below the draft bound.  A batch with
++    // n_tokens > K can be rolled back into when the speculator drafts deeply
++    // (n_rs_batch > K).  n_tokens = n_rs_batch, rollback the full draft range.
++    fprintf(stderr, "=== Phase B: deep draft (n_tokens = n_rs_batch > K) ===\n");
++    for (uint32_t n_rs_seq = 7; n_rs_seq <= 15; n_rs_seq += 4) {
++        const uint32_t K = n_rs_seq + 1;
++        for (uint32_t extra = 1; extra <= 16; extra += 5) {
++            const uint32_t n_rs_batch = K + extra;
++            const uint32_t n_tokens   = n_rs_batch;
++            int fail_b = 0;
++            for (uint32_t r = 1; r <= n_rs_seq; ++r) {
++                const double d = run_case(params, model, llama_init->context(), vocab, n_rs_seq, n_rs_batch, 32, n_tokens, r, false);
++                if (d < 0 || d > eps) {
++                    fprintf(stderr, "FAIL B: n_rs_seq=%u n_rs_batch=%u n_tokens=%u rollback=%u max diff=%g\n",
++                            n_rs_seq, n_rs_batch, n_tokens, r, d);
++                    ++fail_b;
++                }
++            }
++            n_fail += fail_b;
++            fprintf(stderr, "  n_rs_seq=%2u n_rs_batch=%2u n_tokens=%2u: %s\n",
++                    n_rs_seq, n_rs_batch, n_tokens, fail_b ? "FAIL" : "PASS");
++        }
++    }
++
++    fprintf(stderr, "\n%s: total failures = %d\n", n_fail ? "FAIL" : "PASS", n_fail);
++    return n_fail ? 2 : 0;
++}
+diff --git a/tests/test-speculative-adaptive.cpp b/tests/test-speculative-adaptive.cpp
+new file mode 100644
+index 000000000..a5ae0bc64
+--- /dev/null
++++ b/tests/test-speculative-adaptive.cpp
+@@ -0,0 +1,237 @@
++#include "speculative-adaptive.h"
++
++#undef NDEBUG
++
++#include <cassert>
++#include <cstdio>
++
++// The controller's constants (see speculative-adaptive.h):
++//   drop_pressure(d)  = max(60, 10*d)      -> the reset point of the bucket
++//   climb_budget(d)   = 20 + 6*(d - 1)     -> the distance from there to the cap
++//   full accept       = max(1, n_accepted - 1)
++//   miss              = n_accepted - d
++//   cold start        = min(cap, max(floor, cap - 3))
++// Every case below is written against those numbers so a retune has to update
++// this file deliberately rather than silently.
++
++static void test_reset(void) {
++    common_speculative_adaptive ctrl;
++
++    // the cold start sits three steps below the ceiling, with the bucket at the
++    // drop pressure of that depth
++    ctrl.reset(12, 3);
++    assert(ctrl.n_cur == 9);
++    assert(ctrl.n_bucket == 90);
++
++    ctrl.reset(8, 1);
++    assert(ctrl.n_cur == 5);
++    assert(ctrl.n_bucket == 60);
++
++    // the floor bounds the cold start from below
++    ctrl.reset(4, 3);
++    assert(ctrl.n_cur == 3);
++    assert(ctrl.n_bucket == 60);
++
++    ctrl.reset(3, 3);
++    assert(ctrl.n_cur == 3);
++    assert(ctrl.n_bucket == 60);
++
++    // ... and the ceiling from above (a cap below the floor wins)
++    ctrl.reset(1, 3);
++    assert(ctrl.n_cur == 1);
++    assert(ctrl.n_bucket == 60);
++}
++
++static void test_reset_start(void) {
++    common_speculative_adaptive ctrl;
++
++    // --spec-draft-n-start overrides the default cold start; the chosen depth is
++    // clamped to [floor, cap] and the bucket is that depth's drop pressure
++    ctrl.reset(12, 3, 7);
++    assert(ctrl.n_cur == 7);
++    assert(ctrl.n_bucket == 70);
++
++    ctrl.reset(12, 3, 3);
++    assert(ctrl.n_cur == 3);
++    assert(ctrl.n_bucket == 60);
++
++    // below the floor clamps up ...
++    ctrl.reset(12, 3, 1);
++    assert(ctrl.n_cur == 3);
++    assert(ctrl.n_bucket == 60);
++
++    // ... and above the cap clamps down
++    ctrl.reset(12, 4, 15);
++    assert(ctrl.n_cur == 12);
++    assert(ctrl.n_bucket == 120);
++
++    // n_start == 0 (unset) keeps the default cold start (cap - 3)
++    ctrl.reset(12, 3, 0);
++    assert(ctrl.n_cur == 9);
++    assert(ctrl.n_bucket == 90);
++}
++
++static void test_climb(void) {
++    common_speculative_adaptive ctrl;
++
++    // from the cold start at 9 a step needs climb_budget(9) = 68, and a full
++    // accept is worth n_accepted - 1 = 8, so nine of them
++    ctrl.reset(12, 3);
++    for (int i = 0; i < 8; ++i) {
++        ctrl.update(9, 12, 3);
++        assert(ctrl.n_cur == 9);
++    }
++    assert(ctrl.n_bucket == 154);
++    ctrl.update(9, 12, 3);
++    assert(ctrl.n_cur == 10);
++    // the 4-token surplus over the cap carries, and the new depth adds its own
++    // drop pressure: 0 + 4 carry + drop_pressure(10)
++    assert(ctrl.n_bucket == 104);
++
++    // depth 10: budget 74, a full accept worth 9
++    for (int i = 0; i < 7; ++i) {
++        ctrl.update(10, 12, 3);
++        assert(ctrl.n_cur == 10);
++    }
++    assert(ctrl.n_bucket == 167);
++    ctrl.update(10, 12, 3);
++    assert(ctrl.n_cur == 11);
++    assert(ctrl.n_bucket == 112);
++
++    // off the floor: at depth 3 the budget is 32 and a full accept is worth 2
++    ctrl.reset(4, 3);
++    assert(ctrl.n_cur == 3);
++    assert(ctrl.n_bucket == 60);
++    for (int i = 0; i < 15; ++i) {
++        ctrl.update(3, 4, 3);
++        assert(ctrl.n_cur == 3);
++    }
++    assert(ctrl.n_bucket == 90);
++    ctrl.update(3, 4, 3);
++    assert(ctrl.n_cur == 4);
++    assert(ctrl.n_bucket == 60);
++
++    // the ceiling blocks further climbs and the bucket parks at the cap
++    for (int i = 0; i < 100; ++i) {
++        ctrl.update(4, 4, 3);
++    }
++    assert(ctrl.n_cur == 4);
++    assert(ctrl.n_bucket == 98);  // drop_pressure(4) + climb_budget(4)
++
++    // depth 1: a full accept is worth max(1, 1 - 1) = 1 and the budget is 20
++    ctrl.reset(8, 1);
++    ctrl.n_cur = 1;
++    ctrl.n_bucket = 60;
++    for (int i = 0; i < 19; ++i) {
++        ctrl.update(1, 8, 1);
++        assert(ctrl.n_cur == 1);
++    }
++    assert(ctrl.n_bucket == 79);
++    ctrl.update(1, 8, 1);
++    assert(ctrl.n_cur == 2);
++    assert(ctrl.n_bucket == 60);
++}
++
++static void test_drop(void) {
++    common_speculative_adaptive ctrl;
++
++    // from 9, drop_pressure(9) = 90 and a total miss drains 9, so ten of them
++    ctrl.reset(12, 3);
++    for (int i = 0; i < 9; ++i) {
++        ctrl.update(0, 12, 3);
++        assert(ctrl.n_cur == 9);
++    }
++    assert(ctrl.n_bucket == 9);
++    ctrl.update(0, 12, 3);
++    assert(ctrl.n_cur == 8);
++    // 0 - drop_pressure(9) + bucket_cap(8)
++    assert(ctrl.n_bucket == 52);
++
++    // the floor clamps: no drop below it, and the bucket parks at 0
++    ctrl.reset(8, 2);
++    ctrl.n_cur = 2;
++    ctrl.n_bucket = 60;
++    for (int i = 0; i < 29; ++i) {
++        ctrl.update(0, 8, 2);
++        assert(ctrl.n_cur == 2);
++    }
++    assert(ctrl.n_bucket == 2);
++    ctrl.update(0, 8, 2);
++    assert(ctrl.n_cur == 2);
++    assert(ctrl.n_bucket == 0);
++
++    // no matter how bad it gets, the depth never leaves the floor
++    for (int i = 0; i < 1000; ++i) {
++        ctrl.update(0, 8, 2);
++    }
++    assert(ctrl.n_cur == 2);
++    assert(ctrl.n_bucket == 0);
++}
++
++static void test_delta(void) {
++    common_speculative_adaptive ctrl;
++    ctrl.reset(8, 3);
++    ctrl.n_cur = 3;
++    ctrl.n_bucket = 60;
++
++    // a full accept is worth n_accepted - 1
++    ctrl.update(3, 8, 3);
++    assert(ctrl.n_bucket == 62);
++
++    // an accept from another speculator can exceed the depth: still max(1, n - 1)
++    ctrl.update(6, 8, 3);
++    assert(ctrl.n_bucket == 67);
++
++    // a draft that came up one token short is a real miss, not neutral
++    ctrl.update(2, 8, 3);
++    assert(ctrl.n_bucket == 66);
++
++    // ... and a total miss drains the whole depth
++    ctrl.update(0, 8, 3);
++    assert(ctrl.n_bucket == 63);
++}
++
++static void test_mixed_workload_settles(void) {
++    common_speculative_adaptive ctrl;
++
++    // A workload whose acceptance is good enough to hold a high depth must not
++    // be walked up to the ceiling by the surplus carry: after the cold start the
++    // controller may climb while the acceptance is there, but once the full
++    // accepts stop it has to give the depth back. Alternating a full accept with
++    // a half miss at depth 9 (drift 8 and -4.5, so positive) climbs; alternating
++    // it with a total miss (drift 8 and -9, negative) drains and drops.
++    ctrl.reset(12, 3);
++    for (int i = 0; i < 400; ++i) {
++        ctrl.update(i % 2 ? 0 : 9, 12, 3);
++    }
++    assert(ctrl.n_cur < 12);
++
++    // a workload that never accepts anything must end at the floor with an
++    // empty bucket, whatever depth it started from
++    ctrl.reset(12, 3);
++    for (int i = 0; i < 400; ++i) {
++        ctrl.update(0, 12, 3);
++    }
++    assert(ctrl.n_cur == 3);
++    assert(ctrl.n_bucket == 0);
++
++    // and one that always accepts must end at the ceiling
++    ctrl.reset(12, 3);
++    for (int i = 0; i < 400; ++i) {
++        ctrl.update(ctrl.n_cur + 1, 12, 3);
++    }
++    assert(ctrl.n_cur == 12);
++}
++
++int main(void) {
++    test_reset();
++    test_reset_start();
++    test_climb();
++    test_drop();
++    test_delta();
++    test_mixed_workload_settles();
++
++    printf("test-speculative-adaptive: all tests OK\n\n");
++
++    return 0;
++}
+diff --git a/tools/cli/README.md b/tools/cli/README.md
+index de5365e39..4919d9974 100644
+--- a/tools/cli/README.md
++++ b/tools/cli/README.md
+@@ -201,6 +201,7 @@
+ | `--spec-draft-n-max N` | number of tokens to draft for speculative decoding (default: 3)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MAX) |
+ | `--spec-draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 0)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN) |
+ | `--spec-draft-n-ubatch N` | physical maximum batch size of the draft context, use a smaller value to spare VRAM (default: 0 - same as --n-ubatch)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_UBATCH) |
++| `--spec-draft-n-min-adaptive N` | minimum adaptive MTP draft depth; the depth starts here and never drops below it (default: 3)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN_ADAPTIVE) |
+ | `--spec-synth-len L` | target mean synthetic acceptance length, including the target token (benchmarking only)<br/>(env: LLAMA_ARG_SPEC_SYNTH_LEN) |
+ | `--spec-synth-rates P0,P1,...` | comma-separated unconditional per-position synthetic acceptance probabilities (benchmarking only)<br/>(env: LLAMA_ARG_SPEC_SYNTH_RATES) |
+ | `--spec-draft-p-split, --draft-p-split P` | speculative decoding split probability (default: 0.10)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT) |
+@@ -210,7 +211,7 @@
+ | `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)<br/>use --list-devices to see a list of available devices |
+ | `--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
+ | `--spec-draft-model, -md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_MODEL) |
+-| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
++| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-mtp-adaptive,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
+ | `--spec-ngram-mod-n-min N` | minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48) |
+ | `--spec-ngram-mod-n-max N` | maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64) |
+ | `--spec-ngram-mod-n-match N` | ngram-mod lookup length (default: 24) |
+diff --git a/tools/server/README.md b/tools/server/README.md
+index 57f657000..445236ab7 100644
+--- a/tools/server/README.md
++++ b/tools/server/README.md
+@@ -264,6 +264,7 @@ For the full list of features, please refer to [server's changelog](https://gith
+ | `--spec-draft-n-max N` | number of tokens to draft for speculative decoding (default: 3)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MAX) |
+ | `--spec-draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 0)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN) |
+ | `--spec-draft-n-ubatch N` | physical maximum batch size of the draft context, use a smaller value to spare VRAM (default: 0 - same as --n-ubatch)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_UBATCH) |
++| `--spec-draft-n-min-adaptive N` | minimum adaptive MTP draft depth; the depth starts here and never drops below it (default: 3)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN_ADAPTIVE) |
+ | `--spec-synth-len L` | target mean synthetic acceptance length, including the target token (benchmarking only)<br/>(env: LLAMA_ARG_SPEC_SYNTH_LEN) |
+ | `--spec-synth-rates P0,P1,...` | comma-separated unconditional per-position synthetic acceptance probabilities (benchmarking only)<br/>(env: LLAMA_ARG_SPEC_SYNTH_RATES) |
+ | `--spec-draft-p-split, --draft-p-split P` | speculative decoding split probability (default: 0.10)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT) |
+@@ -273,7 +274,7 @@ For the full list of features, please refer to [server's changelog](https://gith
+ | `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)<br/>use --list-devices to see a list of available devices |
+ | `--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
+ | `--spec-draft-model, -md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_MODEL) |
+-| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
++| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-mtp-adaptive,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
+ | `--spec-ngram-mod-n-min N` | minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48) |
+ | `--spec-ngram-mod-n-max N` | maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64) |
+ | `--spec-ngram-mod-n-match N` | ngram-mod lookup length (default: 24) |
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index a5cba1d71..0e66dfe1e 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1199,9 +1199,7 @@ private:
+ 
+         const bool has_mmproj = !params.mmproj.path.empty();
+         const bool has_draft = params.speculative.has_dft();
+-        const bool spec_mtp = std::find(params_base.speculative.types.begin(),
+-                                        params_base.speculative.types.end(),
+-                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
++        const bool spec_mtp = params_base.speculative.has_mtp();
+         const bool has_spec = has_draft || spec_mtp;
+ 
+         if (callback_state) {
+@@ -3908,6 +3906,10 @@ private:
+ 
+                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
+ 
++                        if (spec) {
++                            common_speculative_set_prompt_end(spec.get(), slot.id, slot.task->tokens.pos_next());
++                        }
++
+                         SLT_TRC(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
+                                 slot.n_ctx, slot.task->params.n_keep, slot.task->n_tokens());
+ 
+@@ -4859,7 +4861,12 @@ private:
+                             SLT_INF(slot, "accepted %2zu/%2zu draft tokens (restore checkpoint)\n", accepted.size() - 1, slot.spec_draft.size());
+                         }
+ 
+-                        // partial acceptance is not supported by the context -> truncate the draft and restore the state
++                        // partial acceptance is not supported by the context -> truncate the draft and restore the state.
++                        // the accepted prefix is not committed here: it is replayed and re-verified next round, whose
++                        // accept() would carry the stale draft count of this round. report the partial acceptance now
++                        // via accept_partial - only the adaptive MTP controller consumes it
++                        common_speculative_accept_partial(spec.get(), slot.id, accepted.size() - 1);
++
+                         slot.spec_is_replay = true;
+                         slot.spec_draft = std::move(accepted);
+ 
+-- 
+2.56.0
+
