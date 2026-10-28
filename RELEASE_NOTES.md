@@ -40,6 +40,97 @@ Changes:
   - Not built or run on GPUs. The build is enabled so a `sha-<commit>` candidate
     can be qualified on big-gpu; promotion waits until decode, prefill,
     tool-call, vision and memory tests pass against the production baseline.
+- **Spill v2: the ranks agree with per-rank Engram shards (recipe `k2a-pb1`).** With TP3, each rank has its own
+  Engram shard folder, but the spill fingerprint's common `engram` field included the folder's file listing. Rank 0
+  therefore refused to start with spill on ("rank 1's configuration differs from rank 0's in engram"). The common
+  field is now the recorded revision plus the kit's `engram.json` digest. The listing moves to a new rank-scoped field,
+  `engram_shard` (31), so each rank's store still names its own shards. Spill is still off unless spill flags are given.
+- **Spill v2, step P6: spill wired into the DeepSeek V4.1 Flash 1017 engine on all three ranks, off unless spill
+  flags are given (recipe `k2a-pb1`).** MiaAI-Lab's 0016 dsv41 wiring with 0019's spill half and 0020's exit on a
+  broken agreement, for worlds 2 and 3: the rank wire frame, restore reservations, the followers' spill side,
+  the tier bound to the prompt cache, the spill flags and the tier's counters in `/health` and `/metrics`.
+  Every write into the KV pool bumps the tier's generations first (independently audited, and widened to the
+  ratio-2 groups and scratch row a write can touch); with the tier on, a pass resuming off the 2,048 grid cuts
+  its first chunk at the next boundary and only grid points go to disk. An independent review confirmed that
+  with no spill flags (production) behaviour is unchanged on every rank.
+- **Spill v2, step P5: the cache tier in the DeepSeek V4.1 Flash 1017 engine's prompt cache and lane host, no tier
+  bound (recipe `k2a-pb1`).** MiaAI-Lab's `0014-core-cache-tier`, hand-merged into k2a's `prompt_cache` and
+  `lane_host`: the tier interface, durable lookup (grid and window rules for disk points only), restore parking
+  and flush at stop. Fitted to k2a: salted requests never reach a tier, every memory drop releases rather than
+  forgets the disk point, and the `--learn` imprint and the tier never share a cut. Nothing binds a tier yet; an
+  independent review confirmed tier-off behaviour is unchanged (its one finding, a counter that only a tier
+  resets, is fixed by counting only while a tier is servicing).
+- **Spill v2, step P4: the spill state layout against the DeepSeek V4.1 Flash 1017 engine's model (recipe
+  `k2a-pb1`).** MiaAI-Lab 0016's model side (`SpillDev`, the layout and its self-check) in `model.zig`. The
+  small state is our snapshot less its drafter rings and prompt logits, which a pre-replay disk point's replay
+  and final chunk rebuild anyway. At the end of model open, every rank prints one `spill layout: ok|MISMATCH`
+  line, host arithmetic only while spill is off, never failing the start; `TF_DS_SPILL_SELF_CHECK=1` adds a
+  device round trip on the fresh pool. Serving is otherwise unchanged.
+- **Spill v2, step P3: add the dsv41 spill host modules to the DeepSeek V4.1 Flash 1017 image, not wired
+  (recipe `k2a-pb1`).** MiaAI-Lab's rank wire protocol (v2), rank identity, fingerprint and spill state modules
+  (0016/0019), compiled and tested with the family's tests but not called by the engine, so serving is
+  unchanged. World 3 (our tensor parallel 3) is added to the rank split, with new three-rank tests: agreement,
+  a point missing or damaged on one follower aborting with forget on both, and rank versus common fields.
+- **Fix the DeepSeek V4.1 Flash 1017 image build since the spill store.** The store's mutant test requires
+  every authored fix to be caught, but the one check that catches `recover_drops_on_io` returns early as root
+  (its `chmod 0` cannot simulate a transient read error for root), and the image build runs its CPU checks as
+  root, so the mutant "survived" and `zig build test` failed on every build. As root the mutant test now skips
+  that mutant; the engine also runs as root, where that permission path cannot occur.
+- **Print the DeepSeek V4.1 Flash 1017 engine's CPU check logs when one fails.** `build.py` writes each check's
+  output (`zig build test` and the four `zig test` runs) to `/build/built/build-<n>.log` and only raises, so a
+  failing check showed nothing in CI. The engine stage now prints the tail of each log on failure (the RDMA
+  mock's per-rank lines dropped) and fails as before.
+- **Spill v2, step P2: add the disk block store to the DeepSeek V4.1 Flash 1017 image, inert (recipe `k2a-pb1`).**
+  The first step of porting MiaAI-Lab's spill-to-disk prompt cache (`0013-core-spill-store`) onto the TP3
+  K2a engine: seven new files under `zig/src/core/spill/` and their export, verbatim. Nothing opens a store
+  yet, so serving is unchanged. Two of its tests simulate a short write with a real unaligned `pwrite` on an
+  O_DIRECT descriptor, which Linux refuses on ext4; their direct variant now skips where the kernel refuses
+  the simulation. `make_recipe.py` gains `NEW_FILES` for overlay files upstream does not have.
+- **Fix a stale Engram read-ahead in the DeepSeek V4.1 Flash 1017 image (recipe `k2a-pb1`).** The prefill
+  interleave port (MiaAI-Lab 0005) lets `fillChunk` reuse an already-joined read-ahead with a matching
+  `start` and `n`. A pass that ended early between chunks left that state set, so a later pass whose
+  first chunk began at the same position (a resume there) used the other prompt's Engram rows for that
+  chunk, silently degrading its output. `fillBegin` now joins and clears the read-ahead on every rank.
+- **Retain resumed conversations in the DeepSeek V4.1 Flash 1017 image's prompt cache (recipe `k2a-pb1`).**
+  Kept prompt states live in the shared KV pool, and upstream gave up the oldest first when a new stream
+  needed room, so an agent's long main conversation, idle while its subagents ran, always lost its state
+  and re-read up to 268K tokens on its next turn. `placeKept` now gives up the least recently used state
+  of the lowest tier: never resumed, then superseded prefixes, then resumed conversations' newest states.
+  `TF_DS_RETENTION` is on when unset; `0` restores the old order. Petabridge's own change, for
+  MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#27; one overlay (`dsv41/lanes.zig`) changes.
+- **Add an image prompt cache to recipe `k2a-pb1` of the DeepSeek V4.1 Flash 1017 image.** The prompt
+  cache finds kept states by token ids, and every picture's positions hold the same placeholder token,
+  so a prompt with pictures was never looked up or kept. Every turn of a conversation with an image in
+  its history re-read the whole prompt from 0, and because image prompts run whole, each turn froze
+  every other stream: an agent conversation of about 30K tokens carrying email-attachment images froze
+  all streams for 15 to 19 s per turn. The server now gives such a request a cache key with each
+  picture's positions replaced by ids made from a hash of its payload, and the lane host looks up and
+  keeps by that key. `TF_DS_IMAGE_CACHE` is on when unset and off at `0`. Image prompts still run
+  without the prefill interleave, but only prefill the new part of each turn. Six new overlay targets
+  (`server/prompt.zig` and the patch's test among them) and six replaced k2a overlays bring `k2a-pb1`
+  to 33 overlays, and every overlay file now lives at its target path under `pb1/overlay/`. Ported from
+  MiaAI-Lab's `zig/patches/0006-image-prompt-cache.patch`; `lane_host.zig` is ported by hand.
+- **Add an opt-in prefill interleave to recipe `k2a-pb1` of the DeepSeek V4.1 Flash 1017 image.**
+  Without it, every prompt pass froze all decoding streams for its full length, at about 2.2K prompt
+  tok/s, so a cold 135K-token prompt froze every reply for about a minute. With
+  `TF_DS_PREFILL_INTERLEAVE_MS` set (the deployment sets it), the head runs decode rounds for the other
+  live streams between the 2,048-row chunks of a prompt pass, for up to that many ms. Unset or 0, the
+  engine is unchanged; prompts with images run whole, and the interleave is off while the core logs a
+  trail. Six overlay files (`pb1/interleave/`) bring `k2a-pb1` to 31 overlays. Ported from MiaAI-Lab's
+  `zig/patches/0005-prefill-interleave.patch` (author Coinupbtc); `lane_host.zig` is ported by hand
+  because the patch's hunks misapplied onto k2a.
+- **Build the DeepSeek V4.1 Flash 1017 image from recipe `k2a-pb1`, which returns tool calls to unoffered
+  tools.** Upstream's `k2a` rewrote a DSML invoke naming a tool the request did not offer into the reply
+  text, so a streamed reply with no reasoning came back as raw DSML text (`finish_reason=stop`) and one
+  with reasoning lost the call. `k2a-pb1` is `k2a` plus two overlay files (`tool_parse.zig`,
+  `tool_parse_test.zig`) that return the call under its written name when calls are unlimited;
+  `parallel_tool_calls: false` keeps upstream's behaviour. Launcher profiles must now use
+  `build_variant: "k2a-pb1"`. Reported upstream as MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67.
+- **Add Pillow 12.3.0 to the DeepSeek V4.1 Flash 1017 image.** The engine decodes non-PNG images
+  through a `python3` child that imports Pillow (`dsv41/pil.zig`); without it the engine logged
+  `vision: no Pillow (NoPillow): images other than PNG are refused` and rejected JPEG/WebP inputs.
+  Pinned to the version the qualified serving image used, installed hash-locked from the manylinux
+  wheel, with a build-time JPEG/WebP encode-decode check.
 - **Fix the DeepSeek V4.1 Flash 1017 candidate build:** install curl
   (8.5.0-2ubuntu10.16, from the pinned snapshot) in the NCCL and tools stages.
   NVIDIA's CUDA images purge curl after setup, so the first candidate build

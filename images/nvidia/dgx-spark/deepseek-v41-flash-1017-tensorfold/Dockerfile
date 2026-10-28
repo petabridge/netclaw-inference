@@ -1,4 +1,5 @@
-# DeepSeek V4.1 Flash 1017 on TensorFold's Zig engine (variant 1.2.5, build recipe k2a) for three NVIDIA
+# DeepSeek V4.1 Flash 1017 on TensorFold's Zig engine (variant 1.2.5, build recipe k2a-pb1: upstream's k2a plus
+# the Petabridge overlays in ./pb1/) for three NVIDIA
 # DGX Sparks (GB10, sm_121), tensor parallel 3. CANDIDATE: built from source, not yet GPU-qualified.
 #
 # Upstream: LakyFx/deepseek-v41-flash-exl3-tp3-spark, tag v1.2.5, commit
@@ -15,7 +16,8 @@
 #   nccl       NVIDIA CUDA 13.0.3 devel: NCCL v2.30.7-1 from source for sm_121
 #   tools      CUDA 13.0.3 runtime base + git/xz/venv: shared by the stages below
 #   recipe     the upstream repo at the pinned commit; extract.py unpacks source/, kit/, reference/
-#   engine     Zig 0.17.0: build.py build + install -> tensorfold-native, tf-dsv41-lanes, BUILD.json
+#   engine     Zig 0.17.0: pb1/make_recipe.py, then build.py build + install -> tensorfold-native, tf-dsv41-lanes,
+#              BUILD.json
 #   ropetools  hash-locked CPU PyTorch 2.13.0 + numpy venv (never copied into the image)
 #   final      CUDA 13.0.3 runtime base + everything the three ranks need; weights are bind-mounted
 
@@ -112,14 +114,33 @@ RUN set -eux; \
     tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
     rm /tmp/zig.tar.xz; \
     /opt/zig/zig version
-# build: applies the k2a overlay to source/, runs the CPU checks (zig build test, four zig test runs), builds
+# PETABRIDGE: recipe k2a-pb1 is upstream's k2a plus the overlay files under ./pb1/overlay/, each at its target path.
+# make_recipe.py writes their objects, recipes/k2a-pb1.json and profiles/1.2.5-pb1.json into the recipe tree, and
+# refuses to run unless k2a.json and each replaced base file are the pinned upstream ones. build.py, patch.py and
+# launch.py then check k2a-pb1 exactly as they check k2a. The overlay: a V4.1 DSML call to a tool the request did not
+# offer is returned as a tool call instead of the reply's text (server/tool_parse.zig; upstream report MiaAI-Lab/
+# DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67). The prefill interleave (opt-in through TF_DS_PREFILL_INTERLEAVE_MS) runs
+# decode rounds for other streams between prompt chunks; it ports MiaAI-Lab's 0005-prefill-interleave.patch. The image
+# prompt cache (on unless TF_DS_IMAGE_CACHE=0) keys a prompt with pictures by a hash of each picture's payload so its
+# conversation resumes from a kept state; it ports 0006-image-prompt-cache.patch. The hash below is the recipe file
+# make_recipe.py writes from those inputs.
+COPY pb1/ /src/pb1/
+RUN set -eux; \
+    python3 /src/pb1/make_recipe.py --recipe-root /src/recipe; \
+    echo "69eb2fa5ccc5eb1ee369c25c1bd1afab2da52f0b62967a446fe4e74038f0cc66  /src/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
+# build: applies the k2a-pb1 overlays to source/, runs the CPU checks (zig build test, four zig test runs), builds
 # native + dsv41-tools for aarch64-linux-gnu with the prebuilt kit fatbins, and writes BUILD.json. No network.
-RUN cd /src/recipe && python3 tensorfold/variants/build.py build --recipe k2a \
-      --build-root /build/ds41f --out /build/built --zig /opt/zig/zig
+# PETABRIDGE: build.py writes each CPU check's output to /build/built/build-<n>.log and fails the step without
+# printing it, so a failed check is invisible in CI; on failure, print the tail of each log (the RDMA mock's
+# per-rank lines dropped) and fail as before.
+RUN cd /src/recipe && { python3 tensorfold/variants/build.py build --recipe k2a-pb1 \
+      --build-root /build/ds41f --out /build/built --zig /opt/zig/zig \
+    || { for f in /build/built/build-*.log; do echo "== $f"; grep -v '^RDMA rank' "$f" | tail -150; done; exit 1; }; }
 # install: re-verifies BUILD.json against the recipe and copies the two binaries and BUILD.json to
-# <runtime>/bin-1.2.5 (profile 1.2.5 binary_subdir). The binaries are not stripped or touched afterwards.
+# <runtime>/bin-1.2.5 (profile 1.2.5-pb1: profile 1.2.5 with build_variant k2a-pb1, same binary_subdir). The
+# binaries are not stripped or touched afterwards.
 RUN cd /src/recipe && python3 tensorfold/variants/build.py install \
-      --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5 && \
+      --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5-pb1 && \
     ls -l /srv/ds41f-tensorfold/bin-1.2.5
 
 # --- RoPE generator (build-time only) ---------------------------------------------------------------------
@@ -132,6 +153,17 @@ RUN set -eux; \
       --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple \
       -r /tmp/requirements-rope.txt; \
     /opt/rope-venv/bin/python -c "import torch; assert torch.__version__ == '2.13.0+cpu', torch.__version__"
+
+# --- Pillow for the engine's image decoder (installed into the system python3's dist-packages) -------------
+FROM tools AS pillow
+COPY requirements-pillow.txt /tmp/requirements-pillow.txt
+# PETABRIDGE: the engine decodes non-PNG images through a `python3` child that imports Pillow
+# (dsv41/pil.zig); without it, JPEG/WebP/... are refused ("vision: no Pillow (NoPillow)" at startup).
+# Hash-locked, binary-only, no dependencies; --target keeps it out of any venv.
+RUN set -eux; \
+    python3 -m venv /opt/pip-venv; \
+    /opt/pip-venv/bin/pip install --no-cache-dir --require-hashes --no-deps --only-binary=:all: \
+      --target /opt/pillow -r /tmp/requirements-pillow.txt
 
 # --- final image ----------------------------------------------------------------------------------------
 FROM runtime-base AS final
@@ -168,7 +200,8 @@ COPY --from=engine /build/built/build-*.log /usr/share/doc/ds41f-tensorfold/buil
 COPY --from=recipe /build/ds41f/kit/ /srv/ds41f-tensorfold/kit/
 
 # Upstream files the launcher needs at runtime, with their relative paths (spec: tensorfold/launch.py,
-# profiles/, variants/patch.py, variants/recipes/k2a.json, templates/, prepare_template.py), plus
+# profiles/, variants/patch.py, variants/recipes/k2a.json, templates/, prepare_template.py), plus Petabridge's
+# variants/recipes/k2a-pb1.json from the engine stage, plus
 # cluster.example.json for reference and the recipe's license files. variants/objects/ and artifacts/ are
 # build-time only and are not copied. No __init__.py exists upstream: run `python3 -m tensorfold.launch`
 # from /opt/ds41f/recipe (the WORKDIR), never `python3 .../launch.py` as upstream's tp3@.service does.
@@ -180,6 +213,9 @@ COPY --from=recipe /src/recipe/tensorfold/variants/patch.py /opt/ds41f/recipe/te
 COPY --from=recipe /src/recipe/tensorfold/variants/recipes/k2a.json /opt/ds41f/recipe/tensorfold/variants/recipes/k2a.json
 # The recipe file the launcher compares with BUILD.json: the blob at the pinned commit (git c688435a...).
 RUN echo "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc  /opt/ds41f/recipe/tensorfold/variants/recipes/k2a.json" | sha256sum -c -
+# PETABRIDGE: the recipe this image's BUILD.json names (profiles with build_variant k2a-pb1 select it).
+COPY --from=engine /src/recipe/tensorfold/variants/recipes/k2a-pb1.json /opt/ds41f/recipe/tensorfold/variants/recipes/k2a-pb1.json
+RUN echo "69eb2fa5ccc5eb1ee369c25c1bd1afab2da52f0b62967a446fe4e74038f0cc66  /opt/ds41f/recipe/tensorfold/variants/recipes/k2a-pb1.json" | sha256sum -c -
 
 # RoPE tables for the 10M-position pool, generated on the CPU straight into the kit (5,121,245,184 bytes in
 # four files plus a rewritten rope.json). PETABRIDGE: upstream runs make_rope.py against the extracted kit/;
@@ -201,6 +237,14 @@ COPY --from=recipe /build/ds41f/source/LICENSES/ /usr/share/doc/ds41f-tensorfold
 COPY --from=recipe /build/ds41f/reference/LICENSE /usr/share/doc/ds41f-tensorfold/rope-reference/LICENSE
 COPY attribution/THIRD_PARTY_NOTICES.md /usr/share/doc/ds41f-tensorfold/THIRD_PARTY_NOTICES.md
 COPY selfcheck.py /opt/ds41f/selfcheck.py
+# Pillow 12.3.0 for the image decoder child; Ubuntu's python3 searches /usr/local/lib/python3.12/dist-packages.
+COPY --from=pillow /opt/pillow/ /usr/local/lib/python3.12/dist-packages/
+RUN python3 -c "import io, PIL; from PIL import Image; \
+    assert PIL.__version__ == '12.3.0', PIL.__version__; \
+    bufs = {f: io.BytesIO() for f in ('JPEG', 'WEBP')}; \
+    [Image.new('RGB', (8, 8), (10, 20, 30)).save(b, f) for f, b in bufs.items()]; \
+    [Image.open(io.BytesIO(b.getvalue())).convert('RGB').load() for b in bufs.values()]; \
+    print('Pillow', PIL.__version__, 'JPEG and WebP encode/decode OK')"
 
 # Build-time checks: dlopen of libcublas.so.13, libcublasLt.so.13, libnccl.so.2 (ncclGetVersion == 23007) and
 # libibverbs.so.1 by soname; BUILD.json against the binaries; the 10M RoPE tables by hash; and the launcher's
@@ -220,6 +264,8 @@ LABEL org.opencontainers.image.source="https://github.com/petabridge/netclaw-inf
       io.petabridge.upstream.recipe.variant="1.2.5" \
       io.petabridge.upstream.recipe.build="k2a" \
       io.petabridge.upstream.recipe.manifest.sha256="600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc" \
+      io.petabridge.recipe.build="k2a-pb1" \
+      io.petabridge.recipe.manifest.sha256="69eb2fa5ccc5eb1ee369c25c1bd1afab2da52f0b62967a446fe4e74038f0cc66" \
       io.petabridge.engine="TensorFold (Zig engine: tensorfold-native, tf-dsv41-lanes), frozen fork shipped in the recipe" \
       io.petabridge.engine.source.sha256="8d4b2f808827fd247048082d122b8fab31b75e798b5ed86fd370103ef178469a" \
       io.petabridge.nccl.version="2.30.7-1" \

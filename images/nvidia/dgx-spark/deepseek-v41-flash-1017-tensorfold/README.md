@@ -11,7 +11,8 @@ Image id: `tensorfold-deepseek-v4-1-flash-1017-gb10`
 
 A source build of [LakyFx/deepseek-v41-flash-exl3-tp3-spark](https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-spark)
 at tag `v1.2.5` (commit `b4e476d60f01fda564d760c5906ac1358390c728`), variant `1.2.5`, build recipe
-`k2a`: the TensorFold Zig engine serving DeepSeek V4.1 Flash (`TF351-1017`) with tensor parallel 3, one
+`k2a-pb1` (upstream's `k2a` plus Petabridge overlay files, see
+[Petabridge patches](#petabridge-patches-recipe-k2a-pb1)): the TensorFold Zig engine serving DeepSeek V4.1 Flash (`TF351-1017`) with tensor parallel 3, one
 rank per Spark. Upstream ships no image for this path; its docs build and prepare on the host. This image
 does the host-side work once, in container stages, so a rank only needs the weights.
 
@@ -19,9 +20,9 @@ does the host-side work once, in container stages, so a rank only needs the weig
 
 | Path | What |
 | --- | --- |
-| `/srv/ds41f-tensorfold/bin-1.2.5/` | `tensorfold-native` (rank 0, HTTP server), `tf-dsv41-lanes` (ranks 1 and 2) and `BUILD.json`, from `build.py build --recipe k2a` and `build.py install --variant 1.2.5`. Every rank carries both binaries and the receipt: the launcher validates the receipt on each rank. |
+| `/srv/ds41f-tensorfold/bin-1.2.5/` | `tensorfold-native` (rank 0, HTTP server), `tf-dsv41-lanes` (ranks 1 and 2) and `BUILD.json`, from `build.py build --recipe k2a-pb1` and `build.py install --variant 1.2.5-pb1`. Every rank carries both binaries and the receipt: the launcher validates the receipt on each rank. |
 | `/srv/ds41f-tensorfold/kit/` | The extracted kernel kit (Triton AOT cubins, vision kit, token map) plus the four RoPE tables for the 10M-position pool (`rope-*.f32`, 5,121,245,184 bytes) and the rewritten `rope.json`. Identical on all ranks. |
-| `/opt/ds41f/recipe/` | The upstream files `launch.py` needs, with their relative paths: `tensorfold/launch.py`, `profiles/`, `variants/patch.py`, `variants/recipes/k2a.json`, `templates/`, `prepare_template.py`, `cluster.example.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`. This is the `WORKDIR`. |
+| `/opt/ds41f/recipe/` | The upstream files `launch.py` needs, with their relative paths: `tensorfold/launch.py`, `profiles/`, `variants/patch.py`, `variants/recipes/k2a.json`, Petabridge's `variants/recipes/k2a-pb1.json` (the recipe this image's `BUILD.json` names), `templates/`, `prepare_template.py`, `cluster.example.json`, `LICENSE`, `THIRD_PARTY_NOTICES.md`. This is the `WORKDIR`. |
 | `/usr/local/lib/libnccl.so.2` | NCCL 2.30.7, built from source for `sm_121`. The base image's NCCL 2.28.3 is removed. |
 | `/usr/local/cuda/lib64/libcublas.so.13`, `libcublasLt.so.13` | From the CUDA 13.0.3 runtime base. The engine dlopens both and the container toolkit does not inject them. |
 | `libibverbs.so.1`, the mlx5 provider | `libibverbs1` and `ibverbs-providers` from rdma-core 50.0 (Ubuntu 24.04). |
@@ -29,6 +30,9 @@ does the host-side work once, in container stages, so a rank only needs the weig
 | `/usr/share/doc/ds41f-tensorfold/`, `/usr/share/doc/nccl/` | Licenses and notices, and the build's CPU check logs. |
 
 Not in the image: the weights, the gateway (`ds41f-gateway`), PyTorch, and the Zig toolchain.
+- Pillow 12.3.0 in the system `python3` (`/usr/local/lib/python3.12/dist-packages`), for the engine's image
+  decoder child (`dsv41/pil.zig`). Without it the engine refuses every non-PNG image (`vision: no Pillow`).
+  The version matches the qualified serving image, so decoded pixels match.
 
 ## How the controller runs it
 
@@ -125,8 +129,9 @@ The RoPE tables and the engine binaries are already in the image; no host step i
   run a **4K-page** kernel, and upstream has no native-TensorFold data for it. The pool (7,000,000 tokens),
   12 streams, 48 round rows and 3 GiB prompt snapshots are upstream's configured capacity, not a stress
   result, even on its own host. Expect to lower the pool or snapshot size on first bring-up and watch
-  `MemAvailable`: copy `tensorfold/profiles/1.2.5.json` to a new profile name that keeps `build_variant: "k2a"`
-  and `adaptive_learning: true` (the receipt check keys on those, not the name), or emit the same argv and
+  `MemAvailable`: copy `tensorfold/profiles/1.2.5.json` to a new profile name that sets `build_variant: "k2a-pb1"`
+  (this image's `BUILD.json` names that recipe, so `k2a` fails the receipt check) and keeps
+  `adaptive_learning: true` (the receipt check keys on those, not the name), or emit the same argv and
   environment from the controller. The pool must stay at least `alignUp(context + 50, 2048)` (403,456 at
   the default 401,408 context) and identical on all ranks; the 10M RoPE tables cover any pool up to 9,999,951.
 
@@ -139,11 +144,54 @@ Do these before any promotion:
 2. On each Spark: `uname -r`, `getconf PAGESIZE`, `nvidia-smi`, `ibv_devices`, `ibv_devinfo`, and the RoCE
    GID at the configured `gid_index` on every selected device.
 3. Start all three ranks with `--run`. The launcher must accept the receipt: it compares `BUILD.json` with
-   `tensorfold/variants/recipes/k2a.json` and the binaries' sha256.
+   `tensorfold/variants/recipes/k2a-pb1.json` and the binaries' sha256.
 4. All ranks connect within 1,800 s, `/health` reaches `warming=false`, `/v1/models` lists
    `deepseek-v4.1-flash`.
 5. Chat, MAX reasoning, a tool-call round trip, and an image request; then 12 concurrent short requests.
 6. Watch `MemAvailable` per rank during a long-context run.
+
+## Petabridge patches (recipe k2a-pb1)
+
+The image builds `k2a-pb1`, upstream's `k2a` plus overlay files from `pb1/overlay/`, each stored at its target path (the paths below are the targets). They go through upstream's own
+`patch.py` and `build.py` unchanged, so the launcher checks `k2a-pb1` the way it checks `k2a`.
+
+| Overlay | Change |
+| --- | --- |
+| `zig/src/server/tool_parse.zig` | A V4.1 DSML invoke naming a tool the request did not offer is returned as a tool call under its written name when calls are unlimited. Upstream rewrote it into the reply text: a streamed reply with no reasoning came back as raw DSML text (`finish_reason=stop`), and one with reasoning lost the call. The one-call policy (`parallel_tool_calls: false`) keeps upstream's behaviour. |
+| `zig/src/server/tool_parse_test.zig` | Upstream's test updated for the new behaviour, plus a block mixing offered and unoffered tools. |
+| `zig/src/core/lane_host.zig` | Between two 2,048-row chunks of a prompt pass, the head runs decode rounds for the other live streams for up to `TF_DS_PREFILL_INTERLEAVE_MS` ms, advancing the adaptive learner's clock as `run()` does. It delivers their tokens and takes their cancels, but leaves the filling job's own cancel for its pass. Ported by hand onto k2a's lane host because the patch's hunks misapplied there. Includes the patch's regression test. The image prompt cache also changes this file: a request with a `cache_key` looks up, keeps and reports by that key within k2a's cache namespace. |
+| `zig/src/core/lanes/engine.zig` | k2a's file plus `runnableCount`. |
+| `zig/src/core/lanes/stream.zig` | k2a's file plus `Stream.between`. |
+| `zig/src/core/lanes/fake.zig` | Upstream's file plus the fake backend calling between rounds. |
+| `zig/src/families/dsv41/lanes.zig` | k2a's file plus the patch's hunks. The prompt pass offers rounds between chunks, joining the Engram read-ahead first, and the workers re-arm the read-ahead on `fill_chunk`. For the image prompt cache, a prompt with pictures resumes a kept state, and the tower and workers get rows only for pictures after the resume point. For retention, `placeKept` gives up kept states by retention order instead of oldest first (below). |
+| `zig/src/families/dsv41/model.zig` | Upstream's file plus the patch's hunks. `fillChunk` keeps a joined read-ahead, and `verify` joins it. |
+| `zig/src/server/prompt.zig` | A prompt with pictures gets a cache key the same length as the prompt, with each picture's positions replaced by ids made from a hash of its payload (the same picture always the same ids, above every vocabulary id). Its history length is counted in the expanded prompt. |
+| `zig/src/server/chat.zig` | k2a's file plus passing `Request.cache_key` through. |
+| `zig/src/core/engine_api.zig` | k2a's file plus the `Request.cache_key` field. |
+| `zig/src/core/lane_host_reuse_test.zig` | The patch's test: a picture resumes its conversation, a different picture does not, and a request with no key neither resumes nor keeps. |
+
+The prefill interleave is a port of MiaAI-Lab's [`zig/patches/0005-prefill-interleave.patch`](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0005-prefill-interleave.patch) (author Coinupbtc). Without it, every prompt pass froze all decoding streams for its full length, at about 2.2K prompt tok/s, so a cold 135K-token prompt froze every reply for about a minute. With `TF_DS_PREFILL_INTERLEAVE_MS` set, the decoding streams keep getting rounds between the chunks of a prompt pass. It is off by default: unset or 0, the engine is unchanged. Prompts with images run whole, and the interleave is disabled while the core logs a trail.
+
+The image prompt cache is a port of MiaAI-Lab's [`zig/patches/0006-image-prompt-cache.patch`](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0006-image-prompt-cache.patch). The prompt cache finds kept states by token ids, and every picture's positions hold the same placeholder token, so a prompt with pictures was never looked up or kept: every turn of a conversation with an image in its history re-read the whole prompt from 0. Because image prompts run whole, each such turn also froze every other stream; a ~30K-token agent conversation carrying email-attachment images froze all streams for 15 to 19 s per turn. Now the server gives such a request a cache key built from a hash of each picture's payload, and the lane host looks up and keeps by that key. `TF_DS_IMAGE_CACHE` is on when unset and off at `0`. Image prompts still run without the interleave, but only the new part of each turn is prefilled. k2a's text prompts keep by the stream's context as before, and a request with pictures and no key is still refused by the cache.
+
+Retention is Petabridge's own change, for MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#27. Kept prompt states live in the shared KV pool, and when a new stream needs room, upstream's `placeKept` gave up the oldest first. An agent's long main conversation sits idle while its subagents and one-shot jobs run, so it was always the oldest and always lost: over about four hours, 92 prompts of 20K tokens or more re-read from 0 and 57 more resumed only at the shared system prefix, about 10.3M tokens re-prefilled. Now the victim is the least recently used state of the lowest tier: never resumed first, then superseded (an older prefix of a conversation that has a newer state; a shared prefix that many conversations resume stays recently used, so it goes last in this tier), then the newest states of resumed conversations. A new state inherits its conversation's resume count. Rank 0 alone decides placement, so no frame changes. `TF_DS_RETENTION` is on when unset; `0` restores upstream's oldest-first order.
+
+The stale Engram read-ahead fix is Petabridge's too. MiaAI-Lab's 0005 made `fillChunk` reuse a read-ahead that was already joined when its `start` and `n` match. A pass that ends early, from a cancel between chunks or the interleave's error path, leaves that state set, and `fillBegin` did not clear it. So the next pass whose first chunk started at the same position, a resume there, took the other prompt's Engram rows for one chunk, silently. `fillBegin` now joins and clears it on every rank.
+
+Spill v2 (prompt states on each Spark's local NVMe, MiaAI-Lab's port of wojo's GLM-5.3-Flash work) is being ported in inert steps, each built and tested before the next; nothing writes to disk until a later step enables it through a profile. Step P2 adds the block store (`0013-core-spill-store`) verbatim as seven new files under `zig/src/core/spill/` (listed in `make_recipe.py`'s `NEW_FILES`, which must stay absent from upstream's tree), plus its export from `core/root.zig`. Its two simulated short O_DIRECT write tests skip their direct variant where Linux refuses an unaligned O_DIRECT `pwrite`. Step P3 adds the dsv41 host modules (MiaAI-Lab 0016 and 0019's rank wire v2: `fingerprint`, `rank_identity`, `rank_wire`, `spill_state`, and `parts` as a type dependency) as new files, compiled and tested but not called by the engine. World 3 is added to `rank_identity`'s rank split, and new tests cover three ranks. Step P4 adds 0016's model side to `model.zig`: the spill state layout (the small state is our snapshot less its drafter rings and prompt logits, which the replay and final chunk rebuild) and its self-check. Every rank prints one `spill layout: ok|MISMATCH ...` line at the end of model open, host arithmetic only while spill is off; it never fails the start. Step P5 hand-merges MiaAI-Lab's cache tier (0014) into k2a's `prompt_cache` and `lane_host`: the tier interface, durable lookup, restore parking and flush at stop. Salted requests never reach a tier, memory drops release rather than forget, and the `--learn` imprint and the tier never share a cut. Nothing binds a tier yet, so with no tier the prompt cache behaves as before. Step P6 wires spill into dsv41 on rank 0 and both followers (0016, 0019's spill half, 0020's exit 75 on a broken agreement; worlds 2 and 3): every KV-pool write bumps the tier's generations first, and with the tier on a pass resuming off the 2,048 grid cuts its first chunk at the next boundary, so its later points can go to disk. Complete, decoded, off-grid and picture points stay memory-only. With no spill flags the engine behaves as before. With TP3 each rank holds its own Engram shard folder, so the shard listing is a per-rank fingerprint field (engram_shard) and only the Engram revision and engram.json must agree across ranks.
+
+`pb1/make_recipe.py` runs in the `engine` stage and writes the overlay objects, `variants/recipes/k2a-pb1.json`
+(33 overlays: k2a has 27; the two `tool_parse` files, `fake.zig`, `model.zig`, `prompt.zig` and `lane_host_reuse_test.zig` are new targets, and `lane_host.zig`, `engine.zig`, `stream.zig`, `dsv41/lanes.zig`, `engine_api.zig` and `chat.zig` replace k2a's own overlays of those files) and `profiles/1.2.5-pb1.json` (profile 1.2.5 with `build_variant: "k2a-pb1"`,
+used only by `build.py install`). It refuses to run unless `k2a.json` is the pinned upstream file (`600c83c8...`)
+and each replaced file is still the one it was written against (upstream's base, or k2a's own overlay), so a new upstream commit cannot silently
+drop or misapply a patch. The Dockerfile asserts the written recipe file hashes to `69eb2fa5...`. The image
+carries both `recipes/k2a.json` and `recipes/k2a-pb1.json`.
+
+Upstream report: [MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks#67](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67).
+
+To drop the patch once upstream fixes it: bump the pinned upstream commit, remove the `pb1/` steps from the
+`engine` and `final` stages, build `--recipe k2a` and `install --variant 1.2.5` again, and point profiles back at
+`build_variant: "k2a"`.
 
 ## Build
 
@@ -155,7 +203,7 @@ Do these before any promotion:
 | `nccl` | `nvcr.io/nvidia/cuda:13.0.3-devel-ubuntu24.04@sha256:2396393d...` (arm64) | Builds NCCL `v2.30.7-1` (tarball pinned by sha256) with `NVCC_GENCODE="-gencode=arch=compute_121,code=sm_121"`, as upstream's `build/Dockerfile` L18-L19; asserts version code 23007. |
 | `runtime-base`, `tools` | `nvcr.io/nvidia/cuda:13.0.3-runtime-ubuntu24.04@sha256:760753ab...` (arm64) | Pinned `python3`; `git`, `xz-utils`, `python3-venv`. |
 | `recipe` | `tools` | Fetches the upstream commit (asserts `git rev-parse HEAD`), runs `tensorfold/extract.py --out /build/ds41f`. |
-| `engine` | `recipe` | Zig 0.17.0 (sha256-pinned), `build.py build --recipe k2a`, then `build.py install --variant 1.2.5`. |
+| `engine` | `recipe` | Zig 0.17.0 (sha256-pinned), `pb1/make_recipe.py` writes recipe `k2a-pb1`, then `build.py build --recipe k2a-pb1` and `build.py install --variant 1.2.5-pb1`. |
 | `ropetools` | `tools` | Hash-locked CPU PyTorch 2.13.0 and numpy (`requirements-rope.txt`). |
 | `final` | `runtime-base` | Installs libibverbs, swaps NCCL, copies the engine, kit and launcher files, generates and verifies the RoPE tables, runs `selfcheck.py --full` and `python3 -m tensorfold.launch --help`. |
 
@@ -163,6 +211,7 @@ Deviations from the upstream procedure:
 
 | Change | Why |
 | --- | --- |
+| Builds recipe `k2a-pb1`, not upstream's `k2a`; `pb1/make_recipe.py` writes it in the `engine` stage | `k2a-pb1` is `k2a` plus overlays that fix an unoffered-tool-call bug, add an opt-in prefill interleave and add an image prompt cache; everything else in `k2a` is unchanged. See [Petabridge patches](#petabridge-patches-recipe-k2a-pb1). |
 | `make_rope.py` runs in the `final` stage against the copied kit, with the venv and the upstream scripts mounted from other stages | The 5.12 GB of tables is written once, into one layer, instead of being copied between stages (a second copy would put about 5 GB more in the builder's cache). The script reads only `kit/models/TF351/config.json` and writes the four tables and `rope.json`, so the result is the same; the tables are checked against `rope-hashes.json` by the script and again afterwards. |
 | `extract.py` runs once in `recipe`, not inside the engine stage | `build.py` patches only `source/`; the engine and RoPE steps read `kit/` and `reference/` unchanged. |
 | The recipe file is asserted to hash to `600c83c8...`, not `ed9c269a...` | `ed9c269a...` is the earlier file measured as `1.2.4k2a`. The blob at `v1.2.5` hashes to `600c83c8...` and is what `BUILD.json` binds. See `dependency.lock.json`. |

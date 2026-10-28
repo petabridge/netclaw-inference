@@ -51,7 +51,7 @@
     "tag_object": "7b352157e0c46aded4c9e17da297ccfb0e1c1048",
     "commit": "b4e476d60f01fda564d760c5906ac1358390c728",
     "variant": "1.2.5",
-    "build_recipe": "k2a",
+    "build_recipe": "k2a-pb1",
     "license": "MIT (Copyright (c) 2026 LakyFx); does not relicense third-party code or the model",
     "fetch": "git init, git fetch --depth 1 --filter=blob:none <commit>, git sparse-checkout set --cone tensorfold, checkout; git rev-parse HEAD is asserted equal to the commit and git status must be clean (core.autocrlf=false; upstream binds exact bytes with tensorfold/** -text)",
     "recipe_file": {
@@ -62,6 +62,207 @@
       "note": "This is the launcher's recipe identity (BUILD.json recipe_manifest_sha256). The value ed9c269ab2e5774cdb1869d63471feed84b4a5955b05dbbc9e150d53c970f1c6 quoted in the upstream QUALIFICATION.json (native_manifest_sha256) belongs to the recipe file measured earlier under the alias 1.2.4k2a; the blob at v1.2.5 hashes to the value above (checked from git cat-file, and the GitHub contents API reports the same blob id)."
     },
     "k2a_source_tree_sha256": "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade",
+    "k2a_pb1": {
+      "note": "Petabridge's recipe: k2a plus 25 overlays and 19 new files (the inert spill store under zig/src/core/spill/ and the unwired dsv41 spill host modules) (k2a's 27 plus 6 new targets: the 2 tool_parse files, fake.zig, model.zig, prompt.zig and lane_host_reuse_test.zig; lane_host.zig, engine.zig, stream.zig, dsv41/lanes.zig, engine_api.zig and chat.zig replace k2a's own overlays of those files), written by pb1/make_recipe.py in the engine stage. Every overlay file lives at its target path under pb1/overlay/. Its BUILD.json identity is this recipe file's sha256.",
+      "recipe_file": {
+        "path": "tensorfold/variants/recipes/k2a-pb1.json",
+        "sha256": "69eb2fa5ccc5eb1ee369c25c1bd1afab2da52f0b62967a446fe4e74038f0cc66"
+      },
+      "source_tree_sha256": "3eb7f4e7846a8be5f6812c1df00c5d571905cfeb5d088f15e6e27947071939a3",
+      "base_recipe": "k2a",
+      "base_recipe_sha256": "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc",
+      "overlays": {
+        "zig/src/server/tool_parse.zig": {
+          "file": "pb1/overlay/zig/src/server/tool_parse.zig",
+          "sha256": "18ce473e908cc71810af3c6b93abb0c7b72ec5ea857a6543ef405794cb01983b",
+          "replaces_base_sha256": "211918aed38ccbf5081f9427374d2a33c7e5b903a1481ebd8859950e8a3b5bb0"
+        },
+        "zig/src/server/tool_parse_test.zig": {
+          "file": "pb1/overlay/zig/src/server/tool_parse_test.zig",
+          "sha256": "423ab706642514ce01a54fc9358d3e99d5f8853531be6d9cb8697077d5c2d2c8",
+          "replaces_base_sha256": "53e8a544a1604af7f01715148800af0cdcad09874c94f15123cd723fee0c0fa4"
+        },
+        "zig/src/core/lane_host.zig": {
+          "file": "pb1/overlay/zig/src/core/lane_host.zig",
+          "sha256": "987c48090342e0cfc2aa056ea090b4c6231774b05fa00a5ae1a644b82805cb6b",
+          "replaces_base_sha256": "63a04d2285d41d23de7179ba66fd1f9943618f78636c679307e4fb6d9d8c185d"
+        },
+        "zig/src/core/lanes/engine.zig": {
+          "file": "pb1/overlay/zig/src/core/lanes/engine.zig",
+          "sha256": "c419470a733355c56c2b71a63e2f5ec4b035da04b5d5b064f5224eb504c33655",
+          "replaces_base_sha256": "7b6a7b6db774aded6887e33617894511b085f5ce3a2ab16284cc3b05bb7cac29"
+        },
+        "zig/src/core/lanes/stream.zig": {
+          "file": "pb1/overlay/zig/src/core/lanes/stream.zig",
+          "sha256": "223d9cde7e4bc541eb18e48b5d52b6e589ac35b04d3cb09621b0bb8bcf20e7eb",
+          "replaces_base_sha256": "1eee608d15f66d0844e2d4673ebbab8d979821041d209828e4810ae1278b269e"
+        },
+        "zig/src/core/lanes/fake.zig": {
+          "file": "pb1/overlay/zig/src/core/lanes/fake.zig",
+          "sha256": "1140838396ef03afd5998bbf30e3ffc1fb3c7e2551b9a6eece65ead34bf0ad66",
+          "replaces_base_sha256": "b4e88c57fcc8f31bbd462320818ce44734be0b93da616ae6105597344a42a302"
+        },
+        "zig/src/families/dsv41/lanes.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/lanes.zig",
+          "sha256": "fa9154bbdadd5dc6a8f114f28b9eafaf2bbdbfd76cb7629e5e6240d87cdef14a",
+          "replaces_base_sha256": "00506fc47eeb39b06f414c92be81c2d661d4cc818d5324d4cff7b681e7f9de95"
+        },
+        "zig/src/families/dsv41/model.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/model.zig",
+          "sha256": "5c520328ecc763191604f85b863f502f617d1fe4354d72fa46e6d7db60996626",
+          "replaces_base_sha256": "9fbd6a092c2e62661b08a16990a441a4b610c4c789a60b01e78e078b65ca20c2"
+        },
+        "zig/src/core/engine_api.zig": {
+          "file": "pb1/overlay/zig/src/core/engine_api.zig",
+          "sha256": "4154d7f0b7adffbe782a58a0ea11a12c5fa8cdffc7231f6b11ebda7424298e41",
+          "replaces_base_sha256": "198ec7a4b25bf13a62c55e70116c4112e79cf326e21a55525250280926a4c925"
+        },
+        "zig/src/core/lane_host_reuse_test.zig": {
+          "file": "pb1/overlay/zig/src/core/lane_host_reuse_test.zig",
+          "sha256": "b9b70e1a3a88bb084db34dfad750a282f79675e9c5d3dc3de94a29e5ba19f13f",
+          "replaces_base_sha256": "69adf37d7fe392f34e24e7be0e6ca4bced32fcb41bdbb3f91cc72da928b17d9a"
+        },
+        "zig/src/server/prompt.zig": {
+          "file": "pb1/overlay/zig/src/server/prompt.zig",
+          "sha256": "3ef11f108c6722e467c94ba8cb7959b675ba5f361a5a478a06005b9b0367cbf1",
+          "replaces_base_sha256": "9a3f360224a1b0f0d19d07b070652b09776fbbcb294587ae305818a89eb93798"
+        },
+        "zig/src/server/chat.zig": {
+          "file": "pb1/overlay/zig/src/server/chat.zig",
+          "sha256": "3d21285ab333351d15746e1eaf899d05d3901ba4100a0fc0979176eabb9d7bcc",
+          "replaces_base_sha256": "f96ab77e5d3013249cc312940489f74d9f99e1325a13e85dd691ab25e0321914"
+        },
+        "zig/src/core/root.zig": {
+          "file": "pb1/overlay/zig/src/core/root.zig",
+          "sha256": "a0becb3e8d5156d03902983b9f37f6ac5f3dab44b29ea91039c9c59fa0e604d1",
+          "replaces_base_sha256": "ffcf279a324ad3a236fdb6aac3aed63ce295aa02dcd0037fc86d922dd19e5917"
+        },
+        "zig/src/families/dsv41/dsv41.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/dsv41.zig",
+          "sha256": "a941b0135fa46277ced58ae04d291faa6bb97f4a504f06a762b7969bc173b64e",
+          "replaces_base_sha256": "e0be7b5fb7afcd6945eb1512073cc2f4e5d38052e624b1fa1682e20c56086e7a"
+        },
+        "zig/src/families/dsv41/link.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/link.zig",
+          "sha256": "fa3d3626795b72d654cf81363eebd50bee62fef34c809a16f7b42b7f6e9019cd",
+          "replaces_base_sha256": "bd0509c979e4adac66a3705657ed2e6155a35969153da91ce1b26cf91cb3f6ab"
+        },
+        "zig/src/families/dsv41/rank_cache.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/rank_cache.zig",
+          "sha256": "4da4d5b943785bcb9d9f821bc33cd6f417016c309e07f0532a4754404160f2ea",
+          "replaces_base_sha256": "a7e6794e4ecf7c20bcce1bb9effef374382be53794d7578f815b26b458ca529e"
+        },
+        "zig/src/core/prompt_cache.zig": {
+          "file": "pb1/overlay/zig/src/core/prompt_cache.zig",
+          "sha256": "b1156b050497872d0d432a4aa936b1e11c9ab5ff6b7b17866f25e5fc2065b601",
+          "replaces_base_sha256": "9446351e980bd206837ab625bfa521f51a4bb2f4feac9e79bf6c5a7b4bf936a1"
+        },
+        "zig/build/cuda.zig": {
+          "file": "pb1/overlay/zig/build/cuda.zig",
+          "sha256": "814fff6fdd5dbd97cc341ad18c2d61405ee9f41e7186618fa67c09db07ecb533",
+          "replaces_base_sha256": "c7ca819827054bc4d4e0fc68be7f3b485d2579cfe61c46df7404389fc742c215"
+        },
+        "zig/src/families/dsv41/lanes_main.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/lanes_main.zig",
+          "sha256": "caec2051e3d2539c26dba4830c85bd75ccbbd20b0aae806737d9c05522adb99e",
+          "replaces_base_sha256": "9f27f79e4520008471556ef9deba6db7d1bc9edc2f1ad5fd1ac48f8a1582be80"
+        },
+        "zig/src/families/dsv41/native.zig": {
+          "file": "pb1/overlay/zig/src/families/dsv41/native.zig",
+          "sha256": "fb6a05600a8d0769e651654ddf92f5e4e475cfc8e1005f07dec66f98c4a49642",
+          "replaces_base_sha256": "1cd93d5d40d3c6d9dab7f263c97ba640c358e87c2ebcd8d5f447b61a816d7b20"
+        },
+        "zig/src/native/cuda.zig": {
+          "file": "pb1/overlay/zig/src/native/cuda.zig",
+          "sha256": "88249e919f2c4d0d384f5f93b796d6b2ba836f92dd93125db5596dfc86228eaf",
+          "replaces_base_sha256": "fa9efe5e0edbd464f6dd97434fa7029b906fc6cf63de6adcce117294f56853fa"
+        },
+        "zig/src/server/cli.zig": {
+          "file": "pb1/overlay/zig/src/server/cli.zig",
+          "sha256": "b406bf081ddda45251a9715cf27b01519e5b64871096b6afaba39db95bf36521",
+          "replaces_base_sha256": "255728ac09811a0b3f865cd4afb5367cc2ae09535ae93a4beb1f7fa3c92747f8"
+        },
+        "zig/src/server/engines.zig": {
+          "file": "pb1/overlay/zig/src/server/engines.zig",
+          "sha256": "c8189f091b64fa21cdeaa2393b292665092b6a1b15de6640d64e5dd9dc8ec522",
+          "replaces_base_sha256": "34d357c8054029cc3ffacc0e7ce207a00b041cf637b35e58b9a7e02f3f680265"
+        },
+        "zig/src/server/metrics.zig": {
+          "file": "pb1/overlay/zig/src/server/metrics.zig",
+          "sha256": "1a98bc0cf98654ccdba6a3ab640ae1482cd7d10c48d62f6f58aa3973ab5f6111",
+          "replaces_base_sha256": "ead6c8493fe0a705aba3bbf0d18cad7b5f75d81f77969913d686ec584fa8c212"
+        },
+        "zig/src/server/status_routes.zig": {
+          "file": "pb1/overlay/zig/src/server/status_routes.zig",
+          "sha256": "cb20047ddacd6cc8395320461043496b2e2ea09b6653ab55c8421a97e0199336",
+          "replaces_base_sha256": "bc11bb724d33221c03d5e4df6ecbf9467fab76058395d4450637fa8c5b12d246"
+        }
+      },
+      "new_files": {
+        "zig/src/core/spill/format.zig": { "file": "pb1/overlay/zig/src/core/spill/format.zig", "sha256": "2bb7988359e6f0c1ceb135ca3a99e1c447d9c0067dbbf6f0c3039bb5efb37f78" },
+        "zig/src/core/spill/fsio.zig": { "file": "pb1/overlay/zig/src/core/spill/fsio.zig", "sha256": "612ab1ef59408098cd2995281085d3f3f86ebdfd887efba8531f77da583c627d" },
+        "zig/src/core/spill/mutants.zig": { "file": "pb1/overlay/zig/src/core/spill/mutants.zig", "sha256": "0091c7880483000d4d82628519957252161c9f4cd6ad15bb63dfc0f15b4b03ca" },
+        "zig/src/core/spill/root.zig": { "file": "pb1/overlay/zig/src/core/spill/root.zig", "sha256": "b61e88b8407693965c62615464cb595e4867f10db005b9f1b7974fa01dc00fc4" },
+        "zig/src/core/spill/slots.zig": { "file": "pb1/overlay/zig/src/core/spill/slots.zig", "sha256": "a90b9afb856f6a47b05e95ce20b6bccfe52288a6a9daef5b8705976548f04316" },
+        "zig/src/core/spill/store.zig": { "file": "pb1/overlay/zig/src/core/spill/store.zig", "sha256": "716001f375fc52baace0495b85273c9a2786c0001c1fcd2fe690443fcec8c0a1" },
+        "zig/src/core/spill/store_test.zig": { "file": "pb1/overlay/zig/src/core/spill/store_test.zig", "sha256": "37ad91ba11fe6eba397d663db9950f5aabc62880ae98569177ad76360782089d" },
+        "zig/src/families/dsv41/fingerprint.zig": { "file": "pb1/overlay/zig/src/families/dsv41/fingerprint.zig", "sha256": "82034137687451b91b2c782363817d907fa278a8a57347ec0166436119284f40" },
+        "zig/src/families/dsv41/parts.zig": { "file": "pb1/overlay/zig/src/families/dsv41/parts.zig", "sha256": "80d9afcaad39495ef66b82ac00671207d7d3b5bdc15e081474c20d674232e36b" },
+        "zig/src/families/dsv41/rank_identity.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_identity.zig", "sha256": "25a530f152a187b7ed1fed6f32805c844bf144f08800054945110fac1a758643" },
+        "zig/src/families/dsv41/rank_wire.zig": { "file": "pb1/overlay/zig/src/families/dsv41/rank_wire.zig", "sha256": "3dee50ee33331bb9e7ddbfb8fb71c7b2299e01c3d45cbe49f3237814062706bd" },
+        "zig/src/families/dsv41/spill_state.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_state.zig", "sha256": "12a331a70ddc0a23830f5653e8a3fe4e2a8aa938f54d5c7e2e2f84b0cff5d148" },
+        "zig/src/core/prompt_cache_fake_tier.zig": { "file": "pb1/overlay/zig/src/core/prompt_cache_fake_tier.zig", "sha256": "440ca6be4560fb0f037745c1953e245451c2cd48d64850d36603e3de031a65bd" },
+        "zig/src/core/prompt_cache_tier_test.zig": { "file": "pb1/overlay/zig/src/core/prompt_cache_tier_test.zig", "sha256": "d1b44dae701de13191672c99234f74dded4d53354908b67c8a14801e4abb13fe" },
+        "zig/src/core/lane_host_tier_test.zig": { "file": "pb1/overlay/zig/src/core/lane_host_tier_test.zig", "sha256": "5d385d3c94845114c371bdcc7309a6095fe69dddd6647ee1bdc57787b13febdb" },
+        "zig/src/core/spill_p5_k2a_test.zig": { "file": "pb1/overlay/zig/src/core/spill_p5_k2a_test.zig", "sha256": "32076bb218f7ecdfe6a0f2348ee460882029d74b7ecf0ec0406236b3b2a56ee6" },
+        "zig/src/families/dsv41/spill_p6_test.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_p6_test.zig", "sha256": "2ac33675217740a9cfc6d427a892ea70ddbe99f68825950852b8aeb9074cadca" },
+        "zig/src/families/dsv41/spill_tier.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_tier.zig", "sha256": "ac05b8bdbe9d9cead9d1e0124749d4b538d008e1e85de8928c28e2812291d4dd" },
+        "zig/src/families/dsv41/spill_tier_test.zig": { "file": "pb1/overlay/zig/src/families/dsv41/spill_tier_test.zig", "sha256": "5eca15715d7fb3e1a3c4cfb8b5a66ae7486170f4e7659eb6f7238806c51fa108" }
+      },
+      "make_recipe": {
+        "file": "pb1/make_recipe.py",
+        "sha256": "fb4f474c0fc425fad7234066320701481e51ad57d8dac885f7c967f197b1fadb"
+      },
+      "profile": "tensorfold/profiles/1.2.5-pb1.json (profile 1.2.5 with build_variant k2a-pb1; used only by build.py install)",
+      "upstream_report": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/67",
+      "ported_patches": [
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0016-dsv41-spill-blocks.patch",
+          "author": "MiaAI-Lab",
+          "note": "spill v2 step P6: 0016's dsv41 wiring with 0019's spill half and 0020's exit on a broken agreement, worlds 2 and 3; bump on every KV-pool write path (independently audited, widened to ratio-2 groups and the extent's scratch row); grid realignment with the tier on; off unless spill flags are given"
+        },
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0014-core-cache-tier.patch",
+          "author": "MiaAI-Lab",
+          "note": "spill v2 step P5: the cache tier hand-merged into k2a's prompt_cache and lane_host, no tier bound; salted requests never reach a tier, memory drops release (never forget), the --learn imprint and the tier never share a cut"
+        },
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0016-dsv41-spill-blocks.patch",
+          "author": "MiaAI-Lab",
+          "note": "spill v2 step P4: 0016's model side (SpillDev, the layout and its self-check); the small state is our Snap less the drafter rings and prompt logits; a startup line on every rank, host-only while spill is off"
+        },
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0016-dsv41-spill-blocks.patch",
+          "author": "MiaAI-Lab",
+          "note": "spill v2 step P3, with 0019's rank_wire v2: the dsv41 host modules (fingerprint, rank_identity, rank_wire, spill_state, parts as a type dependency), not wired; world 3 added"
+        },
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0013-core-spill-store.patch",
+          "author": "MiaAI-Lab (from wojo's GLM-5.3-Flash spill v2)",
+          "note": "spill v2 step P2: the disk block store, inert; two simulated short O_DIRECT write tests skip where Linux refuses the simulation"
+        },
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0005-prefill-interleave.patch",
+          "author": "Coinupbtc",
+          "note": "Prefill interleave; opt-in through TF_DS_PREFILL_INTERLEAVE_MS. lane_host.zig is ported by hand because the patch hunks misapplied onto k2a."
+        },
+        {
+          "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/blob/main/zig/patches/0006-image-prompt-cache.patch",
+          "author": "MiaAI-Lab",
+          "note": "Image prompt cache; on unless TF_DS_IMAGE_CACHE=0. lane_host.zig is ported by hand onto k2a's; server/chat.zig and core/engine_api.zig are k2a's overlays plus Request.cache_key."
+        }
+      ]
+    },
     "shipped_inputs": {
       "tensorfold/artifacts/tensorfold-source.tar.gz": { "bytes": 2025673, "sha256": "8d4b2f808827fd247048082d122b8fab31b75e798b5ed86fd370103ef178469a" },
       "tensorfold/artifacts/tensorfold-kernels.tar.gz": { "bytes": 39844643, "sha256": "3e94bac39a953165b05930fc9ef91c905f6238e92640fab3dd984973d761f341" },
@@ -77,7 +278,8 @@
       "tensorfold/profiles/",
       "tensorfold/templates/",
       "tensorfold/variants/patch.py",
-      "tensorfold/variants/recipes/k2a.json"
+      "tensorfold/variants/recipes/k2a.json",
+      "tensorfold/variants/recipes/k2a-pb1.json"
     ],
     "destination": "/opt/ds41f/recipe"
   },
@@ -85,10 +287,12 @@
     "name": "TensorFold (Zig engine); frozen fork of ashhart/TensorFold with the dsv41 family, RDMA ring and tf-dsv41-lanes (BertholomusAI), carried in the recipe as tensorfold-source.tar.gz",
     "license": "Apache-2.0 (earlier code MIT)",
     "k2a_overlay": "27 files overlaid by tensorfold/variants/recipes/k2a.json; final source tree 1,137 files, verified by sha256 before and after the build",
+    "k2a_pb1_overlay": "k2a-pb1 overlays those 27 files plus the 6 new targets in upstream_recipe.k2a_pb1 (33 in all); the source file count is unchanged because they replace existing files",
     "build_commands": [
       "python3 tensorfold/extract.py --out /build/ds41f",
-      "python3 tensorfold/variants/build.py build --recipe k2a --build-root /build/ds41f --out /build/built --zig /opt/zig/zig",
-      "python3 tensorfold/variants/build.py install --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5"
+      "python3 /src/pb1/make_recipe.py --recipe-root /src/recipe",
+      "python3 tensorfold/variants/build.py build --recipe k2a-pb1 --build-root /build/ds41f --out /build/built --zig /opt/zig/zig",
+      "python3 tensorfold/variants/build.py install --built /build/built --runtime /srv/ds41f-tensorfold --variant 1.2.5-pb1"
     ],
     "recorded_upstream_binaries_for_reference": {
       "tensorfold-native": { "bytes": 23164184, "sha256": "a79dd73d621397c5fd159b797850ef5d4ec8246b10bc89b96e26ffe2ee38dc2c" },
@@ -161,5 +365,15 @@
   "provenance": {
     "repository": "https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-spark",
     "commit": "b4e476d60f01fda564d760c5906ac1358390c728"
+  },
+  "pillow": {
+    "purpose": "The engine's image decoder child (zig/src/families/dsv41/pil.zig runs python3 with `from PIL import Image`). Without it, non-PNG images are refused.",
+    "version": "12.3.0",
+    "why_this_version": "pil.zig: decoded pixels match the qualified serving image's Pillow 12.3.0",
+    "wheel": "pillow-12.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+    "sha256": "d9c7f76c0673154f044e9d78c8655fb4213f6ca31a836df48b40fe5d187717b9",
+    "lock": "requirements-pillow.txt",
+    "install": "pip install --require-hashes --no-deps --only-binary=:all: --target /opt/pillow in the pillow stage, copied to /usr/local/lib/python3.12/dist-packages",
+    "license": "MIT-CMU (Pillow); the wheel's bundled codecs (libjpeg-turbo, libwebp, zlib, ...) under their own licenses"
   }
 }

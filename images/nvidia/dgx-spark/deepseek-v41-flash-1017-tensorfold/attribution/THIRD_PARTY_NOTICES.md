@@ -19,6 +19,7 @@ Upstream: https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-spark, tag `v1.2
 | NVIDIA CUDA 13.0.3 runtime libraries, including cuBLAS 13.1.1.3 | NVIDIA CUDA Toolkit EULA / NGC container license | Base image `nvcr.io/nvidia/cuda:13.0.3-runtime-ubuntu24.04` (`NGC-DL-CONTAINER-LICENSE` at `/` in the base); `libcublas.so.13`, `libcublasLt.so.13` |
 | NVIDIA CUDA 13.0.3 devel image (nvcc) | Same | NCCL build stage only; not in the final image |
 | rdma-core 50.0 (`libibverbs1`, `ibverbs-providers`) | GPL-2 or BSD-2-Clause (dual) | Ubuntu 24.04 packages; copyright files in `/usr/share/doc/libibverbs1` and `/usr/share/doc/ibverbs-providers` |
+| Pillow 12.3.0 (manylinux aarch64 wheel, see `../requirements-pillow.txt`) | MIT-CMU (Pillow, Copyright (c) 1997-2011 Secret Labs AB, (c) 1995-2011 Fredrik Lundh and contributors, (c) 2010 Jeffrey A. Clark and contributors); the wheel bundles libjpeg-turbo, libwebp, zlib and other codecs under their own licenses | `/usr/local/lib/python3.12/dist-packages/PIL` and `pillow.libs/`; license files in `pillow-12.3.0.dist-info/` |
 | Ubuntu 24.04 userland, Python 3.12 | Various; see `/usr/share/doc/*/copyright` | Base image and `python3` |
 | Zig 0.17.0 | MIT (Expat) | Build stage only; not in the final image |
 | PyTorch 2.13.0 (CPU), NumPy and their Python dependencies (see `../requirements-rope.txt`) | BSD-3-Clause and others (permissive) | Build stage only: they generate the RoPE tables and are not in the final image |
@@ -27,7 +28,7 @@ Upstream: https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-spark, tag `v1.2
 
 | Item | License | Notes |
 | --- | --- | --- |
-| `Dockerfile`, `apt-snapshot-install.sh`, `selfcheck.py`, `requirements-rope.txt`, `image.json`, `dependency.lock.json`, `README.md` | Apache-2.0 (this repository) | Build and verification glue only. No upstream code is modified. |
+| `Dockerfile`, `apt-snapshot-install.sh`, `selfcheck.py`, `requirements-rope.txt`, `requirements-pillow.txt`, `image.json`, `dependency.lock.json`, `README.md` | Apache-2.0 (this repository) | Build and verification glue only. No upstream code is modified. |
 
 ## In the image
 

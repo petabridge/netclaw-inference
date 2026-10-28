@@ -23,8 +23,10 @@ RECIPE = Path("/opt/ds41f/recipe")
 # The recipe file at upstream tag v1.2.5 (b4e476d6). The launcher compares the
 # sha256 of this exact file with BUILD.json's recipe_manifest_sha256.
 K2A_JSON_SHA256 = "600c83c88d72f22506facc7cc1883f8d9e4439268b7e1d198efdbcb4536de9bc"
-K2A_SOURCE_TREE_SHA256 = "8359db1a55efa9675af26aa8465974ca511ca3e79971380454d4285d89c7aade"
 SOURCE_ARCHIVE_SHA256 = "8d4b2f808827fd247048082d122b8fab31b75e798b5ed86fd370103ef178469a"
+# Petabridge's recipe k2a-pb1 (pb1/make_recipe.py): k2a plus the pb1/ overlays. BUILD.json names it.
+PB1_JSON_SHA256 = "69eb2fa5ccc5eb1ee369c25c1bd1afab2da52f0b62967a446fe4e74038f0cc66"
+PB1_SOURCE_TREE_SHA256 = "3eb7f4e7846a8be5f6812c1df00c5d571905cfeb5d088f15e6e27947071939a3"
 
 NCCL_VERSION_CODE = 23007  # 2.30.7
 
@@ -82,10 +84,10 @@ def check_engine():
     binaries = ROOT / "bin-1.2.5"
     receipt = json.loads((binaries / "BUILD.json").read_bytes())
     check(receipt.get("schema") == "ds41f.native-build.v1", "BUILD.json schema")
-    check(receipt.get("recipe") == "k2a" and receipt.get("version") == "1.2.5", "BUILD.json recipe k2a, version 1.2.5")
+    check(receipt.get("recipe") == "k2a-pb1" and receipt.get("version") == "1.2.5", "BUILD.json recipe k2a-pb1, version 1.2.5")
     check(receipt.get("adaptive_learning") is True, "BUILD.json adaptive_learning")
-    check(receipt.get("recipe_manifest_sha256") == K2A_JSON_SHA256, "BUILD.json recipe_manifest_sha256")
-    check(receipt.get("source_tree_sha256") == K2A_SOURCE_TREE_SHA256, "BUILD.json source_tree_sha256")
+    check(receipt.get("recipe_manifest_sha256") == PB1_JSON_SHA256, "BUILD.json recipe_manifest_sha256")
+    check(receipt.get("source_tree_sha256") == PB1_SOURCE_TREE_SHA256, "BUILD.json source_tree_sha256")
     check(receipt.get("source_archive_sha256") == SOURCE_ARCHIVE_SHA256, "BUILD.json source_archive_sha256")
     check(receipt.get("model_requests") == 0, "BUILD.json model_requests == 0")
     check(set(receipt.get("binaries", {})) == {"tensorfold-native", "tf-dsv41-lanes"}, "BUILD.json binaries")
@@ -95,6 +97,7 @@ def check_engine():
         ldd = subprocess.run(["ldd", str(path)], capture_output=True, text=True)
         check("not found" not in ldd.stdout, f"{name} resolves its shared libraries (ldd)")
     check(sha256(RECIPE / "tensorfold/variants/recipes/k2a.json") == K2A_JSON_SHA256, "recipes/k2a.json sha256")
+    check(sha256(RECIPE / "tensorfold/variants/recipes/k2a-pb1.json") == PB1_JSON_SHA256, "recipes/k2a-pb1.json sha256")
 
 
 def check_kit(full):
